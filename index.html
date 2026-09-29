@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Bench Clamp AR Registration Prototype</title>
+<script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
+<style>
+html,body{margin:0;overflow:hidden;font-family:system-ui,Arial,sans-serif;background:#000}
+#hud{position:fixed;z-index:20;left:10px;right:10px;top:10px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.68);color:#fff;font-size:14px;pointer-events:none}
+#status{font-weight:700}.small{font-size:12px;opacity:.82;margin-top:4px}
+</style>
+<script>
+AFRAME.registerComponent('tracker-hud',{init:function(){
+ const status=document.getElementById('status'); const active=new Set();
+ const names=['m1','m2','m3','m4'];
+ names.forEach((id,i)=>{const m=document.getElementById(id);m.addEventListener('markerFound',()=>{active.add(i+1);status.textContent='Tracking FID '+[...active].join(', ');});m.addEventListener('markerLost',()=>{active.delete(i+1);status.textContent=active.size?'Tracking FID '+[...active].join(', '):'Point camera at a fiducial';});});
+}});
+</script>
+</head>
+<body>
+<div id="hud"><div id="status">Point camera at a fiducial</div><div class="small">Prototype 1 · clamp datum 180 × 70 mm · keep one marker fully visible</div></div>
+<a-scene tracker-hud embedded vr-mode-ui="enabled:false" renderer="antialias:true; alpha:true; precision:mediump" arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
+<a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
+<!-- Each marker is an independent calibrated anchor. Marker plane = X/Z, Y = height. Raw GLB is centimetre-scaled; per-anchor scale converts it to marker-width units. -->
+<!-- FID01 TOP: centre-to-clamp = 90.88 mm. width=58.24 mm. -->
+<a-marker id="m1" type="pattern" url="fid01.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+  <a-entity gltf-model="#clamp" position="-2.455 0.04 1.560" rotation="0 0 0" scale="0.17170 0.17170 0.17170"></a-entity>
+  <a-ring radius-inner="0.045" radius-outer="0.055" rotation="-90 0 0" color="#00ff88"></a-ring>
+</a-marker>
+<!-- FID02 RIGHT: centre-to-clamp = 147.09 mm. width=58.30 mm. -->
+<a-marker id="m2" type="pattern" url="fid02.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+  <a-entity gltf-model="#clamp" position="-4.977 0.04 -0.117" rotation="0 0 0" scale="0.17153 0.17153 0.17153"></a-entity>
+  <a-ring radius-inner="0.045" radius-outer="0.055" rotation="-90 0 0" color="#00ff88"></a-ring>
+</a-marker>
+<!-- FID03 BOTTOM: centre-to-clamp = 90.65 mm. width=54.84 mm. -->
+<a-marker id="m3" type="pattern" url="fid03.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+  <a-entity gltf-model="#clamp" position="-2.608 0.04 -1.653" rotation="0 0 0" scale="0.18235 0.18235 0.18235"></a-entity>
+  <a-ring radius-inner="0.045" radius-outer="0.055" rotation="-90 0 0" color="#00ff88"></a-ring>
+</a-marker>
+<!-- FID04 LEFT: centre-to-clamp = 148.265 mm. width=55.77 mm. -->
+<a-marker id="m4" type="pattern" url="fid04.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+  <a-entity gltf-model="#clamp" position="2.658 0.04 -0.122" rotation="0 0 0" scale="0.17931 0.17931 0.17931"></a-entity>
+  <a-ring radius-inner="0.045" radius-outer="0.055" rotation="-90 0 0" color="#00ff88"></a-ring>
+</a-marker>
+<a-entity camera></a-entity>
+</a-scene>
+</body></html>
