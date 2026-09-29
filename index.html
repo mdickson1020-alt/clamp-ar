@@ -10,21 +10,38 @@
 html,body{margin:0;overflow:hidden;font-family:system-ui,Arial,sans-serif;background:#000}
 #hud{position:fixed;z-index:20;left:10px;right:10px;top:10px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.68);color:#fff;font-size:14px;pointer-events:none}
 #status{font-weight:700}.small{font-size:12px;opacity:.82;margin-top:4px}
+
+  /* Prototype 1.2: keep AR.js webcam element visible behind the transparent A-Frame canvas. */
+  #arjs-video {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    object-fit: cover !important;
+    z-index: -2 !important;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  .a-canvas {
+    background: transparent !important;
+  }
+
 </style>
 <script>
 AFRAME.registerComponent('tracker-hud',{init:function(){
+ window.addEventListener('camera-init',()=>{ console.log('AR.js camera initialised'); });
+ window.addEventListener('camera-error',(e)=>{ console.error('AR.js camera error',e); });
  const status=document.getElementById('status'); const active=new Set();
  const names=['m1','m2','m3','m4'];
- window.addEventListener('camera-init',()=>{status.textContent='Camera ready · point at a fiducial';});
- window.addEventListener('camera-error',(e)=>{status.textContent='Camera error · reload page'; console.error(e);});
- window.addEventListener('arjs-video-loaded',()=>{if(!active.size) status.textContent='Camera live · point at a fiducial';});
- names.forEach((id,i)=>{const m=document.getElementById(id);m.addEventListener('markerFound',()=>{active.add(i+1);status.textContent='Tracking FID '+[...active].join(', ');});m.addEventListener('markerLost',()=>{active.delete(i+1);status.textContent=active.size?'Tracking FID '+[...active].join(', '):'Camera live · point at a fiducial';});});
+ names.forEach((id,i)=>{const m=document.getElementById(id);m.addEventListener('markerFound',()=>{active.add(i+1);status.textContent='Tracking FID '+[...active].join(', ');});m.addEventListener('markerLost',()=>{active.delete(i+1);status.textContent=active.size?'Tracking FID '+[...active].join(', '):'Point camera at a fiducial';});});
 }});
 </script>
 </head>
 <body>
-<div id="hud"><div id="status">Point camera at a fiducial</div><div class="small">Prototype 1.1 · clamp datum 180 × 70 mm · keep one marker fully visible</div></div>
-<a-scene tracker-hud embedded vr-mode-ui="enabled:false" renderer="antialias:true; alpha:true; precision:medium" arjs="sourceType:webcam; videoTexture:true; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
+<div id="hud"><div id="status">Point camera at a fiducial</div><div class="small">Prototype 1.2 · clamp datum 180 × 70 mm · keep one marker fully visible</div></div>
+<a-scene tracker-hud embedded vr-mode-ui="enabled:false" renderer="antialias:true; alpha:true; precision:mediump" arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
 <a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
 <!-- Each marker is an independent calibrated anchor. Marker plane = X/Z, Y = height. Raw GLB is centimetre-scaled; per-anchor scale converts it to marker-width units. -->
 <!-- FID01 TOP: centre-to-clamp = 90.88 mm. width=58.24 mm. -->
