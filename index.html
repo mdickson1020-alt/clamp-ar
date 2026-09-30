@@ -3,98 +3,83 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 1.8</title>
-
+<title>Bench Clamp AR Prototype 1.9</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
-
 <style>
-html,body {
-  margin:0;
-  width:100%;
-  height:100%;
-  overflow:hidden;
-  background:#000;
-  font-family:system-ui,Arial,sans-serif;
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:system-ui,Arial,sans-serif}
+#hud{position:fixed;z-index:10000;left:10px;right:10px;top:10px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.68);color:#fff;font-size:14px;pointer-events:none}
+#status{font-weight:700}.small{font-size:12px;opacity:.82;margin-top:4px}
+#arjs-video{
+ position:fixed!important;left:0!important;top:0!important;
+ height:100vh!important;width:auto!important;min-width:100vw!important;
+ max-width:none!important;max-height:none!important;
+ object-fit:cover!important;z-index:0!important;
+ display:block!important;visibility:visible!important;opacity:1!important;
 }
-#hud {
-  position:fixed;
-  z-index:10000;
-  left:10px;
-  right:10px;
-  top:10px;
-  padding:10px 12px;
-  border-radius:10px;
-  background:rgba(0,0,0,.68);
-  color:#fff;
-  font-size:14px;
-  pointer-events:none;
+a-scene,.a-canvas{
+ position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;
+ max-width:none!important;max-height:none!important;
 }
-#status { font-weight:700; }
-.small { font-size:12px; opacity:.82; margin-top:4px; }
-.a-enter-vr,.a-enter-ar { display:none !important; }
+a-scene{z-index:1!important}
+.a-canvas{z-index:1!important;background:transparent!important}
+.a-enter-vr,.a-enter-ar{display:none!important}
 </style>
-
 <script>
-AFRAME.registerComponent('tracker-hud',{
-  init:function(){
-    const status=document.getElementById('status');
-    const active=new Set();
-    ['m1','m2','m3','m4'].forEach((id,i)=>{
-      const m=document.getElementById(id);
-      m.addEventListener('markerFound',()=>{
-        active.add(i+1);
-        status.textContent='Tracking FID '+[...active].join(', ');
-      });
-      m.addEventListener('markerLost',()=>{
-        active.delete(i+1);
-        status.textContent=active.size
-          ? 'Tracking FID '+[...active].join(', ')
-          : 'Camera live · point at a fiducial';
-      });
-    });
-    window.addEventListener('camera-init',()=>{
-      status.textContent='Camera live · point at a fiducial';
-    });
-  }
-});
+AFRAME.registerComponent('tracker-hud',{init:function(){
+ const status=document.getElementById('status'), active=new Set();
+ ['m1','m2','m3','m4'].forEach((id,i)=>{
+   const m=document.getElementById(id);
+   m.addEventListener('markerFound',()=>{active.add(i+1);status.textContent='Tracking FID '+[...active].join(', ')});
+   m.addEventListener('markerLost',()=>{active.delete(i+1);status.textContent=active.size?'Tracking FID '+[...active].join(', '):'Camera live · point at a fiducial'});
+ });
+ const fit=()=>{
+   const v=document.getElementById('arjs-video');
+   if(!v)return;
+   /* AR.js owns the raw video for tracking. We only alter how that same
+      element is painted to the user: cover the viewport and crop excess. */
+   const vw=v.videoWidth||640, vh=v.videoHeight||480;
+   const sw=window.innerWidth, sh=window.innerHeight;
+   const videoAspect=vw/vh, screenAspect=sw/sh;
+   if(videoAspect>screenAspect){
+      v.style.height=sh+'px';
+      v.style.width=(sh*videoAspect)+'px';
+      v.style.left=((sw-sh*videoAspect)/2)+'px';
+      v.style.top='0px';
+   }else{
+      v.style.width=sw+'px';
+      v.style.height=(sw/videoAspect)+'px';
+      v.style.left='0px';
+      v.style.top=((sh-sw/videoAspect)/2)+'px';
+   }
+ };
+ window.addEventListener('camera-init',()=>{status.textContent='Camera live · point at a fiducial';setTimeout(fit,100);setTimeout(fit,500)});
+ window.addEventListener('arjs-video-loaded',fit);
+ window.addEventListener('resize',fit);
+ window.addEventListener('orientationchange',()=>setTimeout(fit,250));
+ setTimeout(fit,1000);
+}});
 </script>
 </head>
-
 <body>
-<div id="hud">
-  <div id="status">Starting camera…</div>
-  <div class="small">Prototype 1.8 · VIDEO TEXTURE · full viewport</div>
-</div>
-
-<a-scene
-  tracker-hud
-  embedded
-  vr-mode-ui="enabled:false"
-  renderer="antialias:true; alpha:true; precision:mediump"
-  arjs="sourceType:webcam; videoTexture:true; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
-
-  <a-assets>
-    <a-asset-item id="clamp" src="clamp.glb"></a-asset-item>
-  </a-assets>
-
-  <a-marker id="m1" type="pattern" url="fid01.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-    <a-entity gltf-model="#clamp" position="-2.455 0.04 1.560" rotation="0 0 0" scale="0.17170 0.17170 0.17170"></a-entity>
-  </a-marker>
-
-  <a-marker id="m2" type="pattern" url="fid02.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-    <a-entity gltf-model="#clamp" position="-4.977 0.04 -0.117" rotation="0 0 0" scale="0.17153 0.17153 0.17153"></a-entity>
-  </a-marker>
-
-  <a-marker id="m3" type="pattern" url="fid03.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-    <a-entity gltf-model="#clamp" position="-2.608 0.04 -1.653" rotation="0 0 0" scale="0.18235 0.18235 0.18235"></a-entity>
-  </a-marker>
-
-  <a-marker id="m4" type="pattern" url="fid04.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-    <a-entity gltf-model="#clamp" position="2.658 0.04 -0.122" rotation="0 0 0" scale="0.17931 0.17931 0.17931"></a-entity>
-  </a-marker>
-
-  <a-entity camera></a-entity>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 1.9 · RAW TRACKING + FULL-SCREEN COVER</div></div>
+<a-scene tracker-hud embedded vr-mode-ui="enabled:false"
+ renderer="antialias:true; alpha:true; precision:mediump"
+ arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
+ <a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
+ <a-marker id="m1" type="pattern" url="fid01.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+   <a-entity gltf-model="#clamp" position="-2.455 0.04 1.560" scale="0.17170 0.17170 0.17170"></a-entity>
+ </a-marker>
+ <a-marker id="m2" type="pattern" url="fid02.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+   <a-entity gltf-model="#clamp" position="-4.977 0.04 -0.117" scale="0.17153 0.17153 0.17153"></a-entity>
+ </a-marker>
+ <a-marker id="m3" type="pattern" url="fid03.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+   <a-entity gltf-model="#clamp" position="-2.608 0.04 -1.653" scale="0.18235 0.18235 0.18235"></a-entity>
+ </a-marker>
+ <a-marker id="m4" type="pattern" url="fid04.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
+   <a-entity gltf-model="#clamp" position="2.658 0.04 -0.122" scale="0.17931 0.17931 0.17931"></a-entity>
+ </a-marker>
+ <a-entity camera></a-entity>
 </a-scene>
 </body>
 </html>
