@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 4.0</title>
+<title>Bench Clamp AR Prototype 5.0</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -35,74 +35,124 @@ a-scene{z-index:1!important;background:transparent!important}
 <script>
 AFRAME.registerComponent('tracker-hud',{init:function(){
  const scene=this.el,status=document.getElementById('status'),display=document.getElementById('display-video');
- const rig=document.getElementById('clamp-world'),markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
+ const rig=document.getElementById('clamp-world');
+ const markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
+
  const attach=()=>{const v=document.getElementById('arjs-video');if(v&&v.srcObject&&display.srcObject!==v.srcObject){display.srcObject=v.srcObject;display.play().catch(()=>{});}};
- window.addEventListener('camera-init',()=>setTimeout(attach,50));window.addEventListener('arjs-video-loaded',attach);
+ window.addEventListener('camera-init',()=>setTimeout(attach,50));
+ window.addEventListener('arjs-video-loaded',attach);
  const q=setInterval(()=>{attach();if(display.srcObject)clearInterval(q)},100);
 
- // Marker -> common mat-centre transforms, in marker-local units.
+ /*
+   5.0 rule: no marker is trusted by itself.
+   Each visible marker predicts the SAME mat-centre pose.
+   We only render when at least two predictions agree geometrically.
+   This rejects the false-positive "markers" seen on classroom objects.
+ */
  const off=[
-  [new THREE.Vector3(0,.025, 1.60543),0],
-  [new THREE.Vector3(-2.56304,.025,0),-Math.PI/2],
-  [new THREE.Vector3(0,.025,-1.72028),Math.PI],
-  [new THREE.Vector3(2.64936,.025,0),Math.PI/2]];
+   [new THREE.Vector3(0,.025, 1.60543),0],          // FID01 top
+   [new THREE.Vector3(-2.56304,.025,0),-Math.PI/2],// FID02 right
+   [new THREE.Vector3(0,.025,-1.72028),Math.PI],   // FID03 bottom
+   [new THREE.Vector3(2.64936,.025,0),Math.PI/2]   // FID04 left
+ ];
  const yaxis=new THREE.Vector3(0,1,0);
  const mp=new THREE.Vector3(),mq=new THREE.Quaternion(),ms=new THREE.Vector3();
- const ro=new THREE.Vector3(),p=new THREE.Vector3(),lq=new THREE.Quaternion(),qq=new THREE.Quaternion();
- const fusedP=new THREE.Vector3(),fusedQ=new THREE.Quaternion();
- let lastGood=0;
+ const ro=new THREE.Vector3(),pp=new THREE.Vector3(),lq=new THREE.Quaternion(),qq=new THREE.Quaternion();
+ const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
+
+ let goodFrames=0,badFrames=0,lastP=new THREE.Vector3(),lastQ=new THREE.Quaternion(),havePose=false;
 
  const transparent=()=>{if(scene.renderer){scene.renderer.setClearColor(0,0);scene.renderer.setClearAlpha(0);scene.renderer.domElement.style.background='transparent';}};
  scene.addEventListener('render-target-loaded',transparent);setTimeout(transparent,500);
 
+ function markerPose(m,i){
+   m.object3D.updateMatrixWorld(true);
+   m.object3D.matrixWorld.decompose(mp,mq,ms);
+   ro.copy(off[i][0]).applyQuaternion(mq);
+   pp.copy(mp).add(ro);
+   lq.setFromAxisAngle(yaxis,off[i][1]);
+   qq.copy(mq).multiply(lq);
+   return {i:i,p:pp.clone(),q:qq.clone()};
+ }
+
+ function angleBetween(a,b){
+   let d=Math.abs(a.dot(b)); d=Math.min(1,Math.max(-1,d));
+   return 2*Math.acos(d);
+ }
+
  scene.addEventListener('renderstart',()=>{
-  const loop=()=>{
-   const poses=[];
-   markers.forEach((m,i)=>{
-    if(!m.object3D.visible)return;
-    m.object3D.updateMatrixWorld(true);m.object3D.matrixWorld.decompose(mp,mq,ms);
-    ro.copy(off[i][0]).applyQuaternion(mq);p.copy(mp).add(ro);
-    lq.setFromAxisAngle(yaxis,off[i][1]);qq.copy(mq).multiply(lq);
-    poses.push({p:p.clone(),q:qq.clone(),i});
-   });
+   const loop=()=>{
+     const raw=[];
+     markers.forEach((m,i)=>{if(m.object3D.visible) raw.push(markerPose(m,i));});
 
-   if(poses.length){
-    // Robust centre: average all visible marker-derived mat centres.
-    fusedP.set(0,0,0);poses.forEach(x=>fusedP.add(x.p));fusedP.multiplyScalar(1/poses.length);
+     // Find the largest mutually-consistent cluster.
+     // Position threshold is deliberately generous for first calibration;
+     // orientation threshold rejects flipped/false marker solutions.
+     let best=[];
+     for(let seed=0;seed<raw.length;seed++){
+       const cluster=[raw[seed]];
+       for(let j=0;j<raw.length;j++){
+         if(j===seed)continue;
+         const pd=raw[seed].p.distanceTo(raw[j].p);
+         const ad=angleBetween(raw[seed].q,raw[j].q);
+         if(pd<0.85 && ad<0.65) cluster.push(raw[j]); // ~37 degrees
+       }
+       if(cluster.length>best.length) best=cluster;
+     }
 
-    // Reject gross position outliers, then recompute centre.
-    const kept=poses.filter(x=>x.p.distanceTo(fusedP)<1.25 || poses.length<3);
-    fusedP.set(0,0,0);kept.forEach(x=>fusedP.add(x.p));fusedP.multiplyScalar(1/kept.length);
+     if(best.length>=2){
+       targetP.set(0,0,0);
+       best.forEach(x=>targetP.add(x.p));
+       targetP.multiplyScalar(1/best.length);
 
-    // Quaternion fusion with hemisphere correction.
-    fusedQ.copy(kept[0].q);
-    for(let k=1;k<kept.length;k++){
-      let qk=kept[k].q.clone();
-      if(fusedQ.dot(qk)<0)qk.set(-qk.x,-qk.y,-qk.z,-qk.w);
-      fusedQ.slerp(qk,1/(k+1));
-    }
+       targetQ.copy(best[0].q);
+       for(let k=1;k<best.length;k++){
+         const qk=best[k].q.clone();
+         if(targetQ.dot(qk)<0)qk.set(-qk.x,-qk.y,-qk.z,-qk.w);
+         targetQ.slerp(qk,1/(k+1));
+       }
 
-    if(!rig.object3D.visible){
-      rig.object3D.position.copy(fusedP);rig.object3D.quaternion.copy(fusedQ);
-    }else{
-      // Fast enough to follow deliberate motion, slow enough to reject jitter.
-      rig.object3D.position.lerp(fusedP,.16);
-      rig.object3D.quaternion.slerp(fusedQ,.14);
-    }
-    rig.object3D.visible=true;lastGood=performance.now();
-    status.textContent='MAT LOCK · '+kept.length+' marker'+(kept.length===1?'':'s');
-   }else if(performance.now()-lastGood>1400){
-    rig.object3D.visible=false;status.textContent='Hold mat in view';
-   }
+       // Require several consecutive valid frames before appearing.
+       goodFrames++; badFrames=0;
+       if(goodFrames>=5){
+         if(!havePose){
+           lastP.copy(targetP); lastQ.copy(targetQ); havePose=true;
+         }else{
+           // Limit single-frame leaps before smoothing.
+           const jump=lastP.distanceTo(targetP);
+           if(jump<0.45){
+             lastP.lerp(targetP,.22);
+             lastQ.slerp(targetQ,.18);
+           }
+         }
+         rig.object3D.position.copy(lastP);
+         rig.object3D.quaternion.copy(lastQ);
+         rig.object3D.visible=true;
+         status.textContent='RIGID MAT LOCK · '+best.length+' agreeing markers';
+       }else{
+         status.textContent='Confirming mat · '+best.length+' markers';
+       }
+     }else{
+       goodFrames=0; badFrames++;
+       status.textContent=raw.length
+         ? 'NO LOCK · markers disagree ('+raw.length+' seen)'
+         : 'Point camera at mat';
+       // Short dropout tolerance only. Never let a stale clamp wander the room.
+       if(badFrames>12){
+         rig.object3D.visible=false;
+         havePose=false;
+       }
+     }
+     requestAnimationFrame(loop);
+   };
    requestAnimationFrame(loop);
-  };requestAnimationFrame(loop);
  });
 }});
 </script>
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 4.0 · MULTI-MARKER MAT FUSION</div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.0 · RIGID MAT LOCK · validated constellation</div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
@@ -112,7 +162,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  <a-marker id="m3" type="pattern" url="fid03.patt" smooth="true" smoothCount="20" smoothTolerance="0.02" smoothThreshold="5"></a-marker>
  <a-marker id="m4" type="pattern" url="fid04.patt" smooth="true" smoothCount="20" smoothTolerance="0.02" smoothThreshold="5"></a-marker>
  <a-entity id="clamp-world" visible="false">
-   <a-entity gltf-model="#clamp" rotation="0 0 0" scale="1.71742 1.71742 1.71742"></a-entity>
+   <a-entity gltf-model="#clamp" rotation="0 0 0" scale="1.25 1.25 1.25"></a-entity>
  </a-entity>
  <a-entity camera></a-entity>
 </a-scene>
