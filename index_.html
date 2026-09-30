@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Bench Clamp AR Prototype 5.4</title>
+<script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:system-ui,Arial,sans-serif}
+#hud{position:fixed;z-index:10000;left:10px;right:10px;top:10px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.68);color:#fff;font-size:14px;pointer-events:none}
+#status{font-weight:700}.small{font-size:12px;opacity:.82;margin-top:4px}
+#display-video{
+ position:fixed!important;inset:0!important;
+ width:100vw!important;height:100vh!important;
+ object-fit:cover!important;
+ z-index:0!important;
+ background:#000;
+}
+#arjs-video{
+ position:fixed!important;
+ width:1px!important;height:1px!important;
+ left:-10px!important;top:-10px!important;
+ opacity:0!important;
+ pointer-events:none!important;
+}
+a-scene,.a-canvas{
+ position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;
+ max-width:none!important;max-height:none!important;
+}
+a-scene{z-index:1!important;background:transparent!important}
+.a-canvas{z-index:1!important;background:transparent!important}
+.a-enter-vr,.a-enter-ar{display:none!important}
+</style>
+<script>
+AFRAME.registerComponent('tracker-hud',{init:function(){
+ const scene=this.el;
+ const status=document.getElementById('status');
+ const display=document.getElementById('display-video');
+ const rig=document.getElementById('clamp-world');
+ const markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
+
+ rig.object3D.visible=false;
+
+ // Measured marker-centre positions relative to the centre of the 177 x 76 mm
+ // clamp footprint, in METRES. X = right, Z = down the printed sheet.
+ const local=[
+   new THREE.Vector2( 0.000000,-0.093500), // FID01 TOP
+   new THREE.Vector2( 0.145590, 0.000000), // FID02 RIGHT
+   new THREE.Vector2( 0.000000, 0.093650), // FID03 BOTTOM
+   new THREE.Vector2(-0.146765, 0.000000)  // FID04 LEFT
+ ];
+
+ const attachDisplay=()=>{
+   const source=document.getElementById('arjs-video');
+   if(source && source.srcObject && display.srcObject!==source.srcObject){
+     display.srcObject=source.srcObject;
+     display.play().catch(()=>{});
+   }
+ };
+ window.addEventListener('camera-init',()=>setTimeout(attachDisplay,50));
+ window.addEventListener('arjs-video-loaded',attachDisplay);
+ const streamTimer=setInterval(()=>{attachDisplay();if(display.srcObject)clearInterval(streamTimer)},100);
+
+ // Make the visible camera and WebGL canvas use the SAME 4:3 cover rectangle.
+ // This removes the split-video crop mismatch: the overlay is cropped exactly
+ // like the camera image rather than stretched to the portrait viewport.
+ function syncViewport(){
+   const source=document.getElementById('arjs-video');
+   const canvas=scene.canvas || document.querySelector('.a-canvas');
+   if(!source || !canvas) return;
+
+   const vw=source.videoWidth||640, vh=source.videoHeight||480;
+   const sw=window.innerWidth, sh=window.innerHeight;
+   const va=vw/vh, sa=sw/sh;
+   let w,h,left,top;
+
+   if(va>sa){
+     h=sh; w=h*va; left=(sw-w)/2; top=0;
+   }else{
+     w=sw; h=w/va; left=0; top=(sh-h)/2;
+   }
+
+   Object.assign(display.style,{
+     width:w+'px',height:h+'px',left:left+'px',top:top+'px',
+     right:'auto',bottom:'auto',objectFit:'fill'
+   });
+   Object.assign(canvas.style,{
+     position:'fixed',width:w+'px',height:h+'px',
+     left:left+'px',top:top+'px',maxWidth:'none',maxHeight:'none',
+     background:'transparent'
+   });
+
+   if(scene.renderer){
+     const cw=Math.round(w), ch=Math.round(h);
+     const current=scene.renderer.getSize(new THREE.Vector2());
+     if(Math.abs(current.x-cw)>1 || Math.abs(current.y-ch)>1){
+       scene.renderer.setSize(cw,ch,false);
+     }
+   }
+ }
+ window.addEventListener('camera-init',()=>{setTimeout(syncViewport,100);setTimeout(syncViewport,700)});
+ window.addEventListener('arjs-video-loaded',()=>setTimeout(syncViewport,50));
+ window.addEventListener('resize',syncViewport);
+ window.addEventListener('orientationchange',()=>setTimeout(syncViewport,250));
+ setInterval(syncViewport,500);
+
+ const transparent=()=>{
+   if(scene.renderer){
+     scene.renderer.setClearColor(0x000000,0);
+     scene.renderer.setClearAlpha(0);
+     scene.renderer.domElement.style.background='transparent';
+   }
+ };
+ scene.addEventListener('render-target-loaded',transparent);
+ setTimeout(transparent,500);
+
+ const wp=new THREE.Vector3(),wq=new THREE.Quaternion(),ws=new THREE.Vector3();
+ const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
+ const smoothP=new THREE.Vector3(),smoothQ=new THREE.Quaternion();
+ let havePose=false,lastGood=0;
+
+ function observed(i){
+   const o=markers[i].object3D;
+   o.updateMatrixWorld(true);
+   o.matrixWorld.decompose(wp,wq,ws);
+   return {i:i,p:wp.clone()};
+ }
+
+ function knownDistance(i,j){
+   const dx=local[i].x-local[j].x, dz=local[i].y-local[j].y;
+   return Math.hypot(dx,dz);
+ }
+
+ function constellationIsSane(obs){
+   // Pairwise distance test in physical metres. This rejects unrelated false
+   // marker detections without using marker quaternions.
+   let worst=0;
+   for(let a=0;a<obs.length;a++){
+     for(let b=a+1;b<obs.length;b++){
+       const expected=knownDistance(obs[a].i,obs[b].i);
+       const measured=obs[a].p.distanceTo(obs[b].p);
+       if(expected>0){
+         const frac=Math.abs(measured-expected)/expected;
+         worst=Math.max(worst,frac);
+       }
+     }
+   }
+   return {ok:worst<0.38,worst:worst};
+ }
+
+ function solveMat(obs){
+   // Least-squares rigid plane from KNOWN 2D mat coordinates to OBSERVED
+   // camera-space marker centres. Uses positions only, never marker rotations.
+   let mx=0,mz=0;
+   const mp=new THREE.Vector3();
+   obs.forEach(o=>{mx+=local[o.i].x;mz+=local[o.i].y;mp.add(o.p)});
+   const n=obs.length; mx/=n; mz/=n; mp.multiplyScalar(1/n);
+
+   let sxx=0,szz=0,sxz=0;
+   const sxp=new THREE.Vector3(), szp=new THREE.Vector3();
+
+   obs.forEach(o=>{
+     const dx=local[o.i].x-mx;
+     const dz=local[o.i].y-mz;
+     const dp=o.p.clone().sub(mp);
+     sxx+=dx*dx; szz+=dz*dz; sxz+=dx*dz;
+     sxp.addScaledVector(dp,dx);
+     szp.addScaledVector(dp,dz);
+   });
+
+   const det=sxx*szz-sxz*sxz;
+   if(Math.abs(det)<1e-10) return null;
+
+   // Raw mappings local-X -> camera-space and local-Z -> camera-space.
+   const ax=sxp.clone().multiplyScalar(szz)
+       .addScaledVector(szp,-sxz).multiplyScalar(1/det);
+   const az=szp.clone().multiplyScalar(sxx)
+       .addScaledVector(sxp,-sxz).multiplyScalar(1/det);
+
+   if(ax.length()<0.2 || az.length()<0.2) return null;
+
+   // Orthonormalise to make one rigid mat frame.
+   const xAxis=ax.clone().normalize();
+   const zAxis=az.clone().addScaledVector(xAxis,-az.dot(xAxis)).normalize();
+   const yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis).normalize();
+   const zFixed=new THREE.Vector3().crossVectors(xAxis,yAxis).normalize();
+   const xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
+
+   const basis=new THREE.Matrix4().makeBasis(xFixed,yAxis,zFixed);
+   const q=new THREE.Quaternion().setFromRotationMatrix(basis);
+
+   // Best-fit physical centre (X=0,Z=0), still in camera/world coordinates.
+   const centre=mp.clone()
+     .addScaledVector(ax,-mx)
+     .addScaledVector(az,-mz);
+
+   // Residual of marker centres after fitting the physical fixture.
+   let rms=0;
+   obs.forEach(o=>{
+     const pred=centre.clone()
+       .addScaledVector(xFixed,local[o.i].x)
+       .addScaledVector(zFixed,local[o.i].y);
+     rms+=pred.distanceToSquared(o.p);
+   });
+   rms=Math.sqrt(rms/n);
+
+   return {p:centre,q:q,rms:rms};
+ }
+
+ scene.addEventListener('renderstart',()=>{
+   const loop=()=>{
+     const obs=[];
+     markers.forEach((m,i)=>{if(m.object3D.visible)obs.push(observed(i));});
+
+     let solved=null, sanity={ok:false,worst:9};
+     if(obs.length>=3){
+       sanity=constellationIsSane(obs);
+       if(sanity.ok) solved=solveMat(obs);
+     }
+
+     if(solved && solved.rms<0.035){
+       targetP.copy(solved.p);
+       targetQ.copy(solved.q);
+
+       if(!havePose){
+         smoothP.copy(targetP); smoothQ.copy(targetQ); havePose=true;
+       }else{
+         // One smoothing stage only, after the rigid mat has been solved.
+         smoothP.lerp(targetP,.28);
+         smoothQ.slerp(targetQ,.24);
+       }
+
+       rig.object3D.position.copy(smoothP);
+       rig.object3D.quaternion.copy(smoothQ);
+       rig.object3D.visible=true;
+       rig.setAttribute('visible',true);
+       lastGood=performance.now();
+
+       status.textContent='PHYSICAL MAT LOCK · '+obs.length+
+         ' markers · RMS '+Math.round(solved.rms*1000)+' mm';
+     }else{
+       const age=performance.now()-lastGood;
+       if(havePose && age<900){
+         // With only 1-2 markers, hold the last GOOD rigid pose. Do not invent one.
+         rig.object3D.visible=true;
+         status.textContent='MAT HOLD · '+obs.length+' seen · '+Math.round(age)+' ms';
+       }else{
+         rig.object3D.visible=false;
+         rig.setAttribute('visible',false);
+         havePose=false;
+         if(obs.length>=3 && !sanity.ok){
+           status.textContent='REJECTED CONSTELLATION · '+obs.length+' seen';
+         }else{
+           status.textContent='Need 3 markers · '+obs.length+' seen';
+         }
+       }
+     }
+
+     requestAnimationFrame(loop);
+   };
+   requestAnimationFrame(loop);
+ });
+}});
+</script>
+</head>
+<body>
+<video id="display-video" autoplay muted playsinline></video>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.4 · PHYSICAL MAT SOLVER · 3+ MARKERS</div></div>
+<a-scene tracker-hud embedded vr-mode-ui="enabled:false"
+ renderer="antialias:true; alpha:true; precision:mediump"
+ arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
+ <a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
+ <a-marker id="m1" type="pattern" url="fid01.patt" size="0.05824" smooth="false"></a-marker>
+ <a-marker id="m2" type="pattern" url="fid02.patt" size="0.05830" smooth="false"></a-marker>
+ <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false"></a-marker>
+ <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false"></a-marker>
+ <a-entity id="clamp-world" visible="false">
+   <a-entity gltf-model="#clamp" position="0 0 0" rotation="0 0 0"
+             scale="0.1 0.1 0.1"></a-entity>
+ </a-entity>
+ <a-entity camera></a-entity>
+</a-scene>
+</body>
+</html>
