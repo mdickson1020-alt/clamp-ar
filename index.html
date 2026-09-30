@@ -3,122 +3,172 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Bench Clamp AR Registration Prototype 1.3</title>
+<title>Bench Clamp AR Registration Prototype</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
-html,body{
-  margin:0;
-  width:100%;
-  height:100%;
-  overflow:hidden;
-  font-family:system-ui,Arial,sans-serif;
-  background:transparent !important;
+html, body {
+  margin: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  background: transparent !important;
+  font-family: system-ui, Arial, sans-serif;
 }
-/* AR.js creates this video element after startup. Keep it visibly underneath WebGL. */
-#arjs-video{
-  position:fixed !important;
-  top:0 !important;
-  left:0 !important;
-  width:100vw !important;
-  height:100vh !important;
-  object-fit:cover !important;
-  z-index:0 !important;
-  display:block !important;
-  visibility:visible !important;
-  opacity:1 !important;
+#hud {
+  position: fixed;
+  z-index: 10000;
+  left: 10px; right: 10px; top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0,0,0,.68);
+  color: #fff;
+  font-size: 14px;
+  pointer-events: none;
 }
-a-scene{
-  position:fixed !important;
-  inset:0 !important;
-  z-index:1 !important;
-  background:transparent !important;
+#status { font-weight: 700; }
+.small { font-size: 12px; opacity: .82; margin-top: 4px; }
+
+/* 1.4: force BOTH AR.js video and A-Frame canvas onto the same viewport. */
+#arjs-video {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: cover !important;
+  z-index: 0 !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
 }
-.a-canvas{
-  position:fixed !important;
-  inset:0 !important;
-  z-index:1 !important;
-  background:transparent !important;
+
+a-scene,
+.a-canvas {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
 }
-#hud{
-  position:fixed;
-  z-index:20;
-  left:10px;
-  right:10px;
-  top:10px;
-  padding:10px 12px;
-  border-radius:10px;
-  background:rgba(0,0,0,.62);
-  color:#fff;
-  font-size:14px;
-  pointer-events:none;
+
+a-scene { z-index: 1 !important; }
+.a-canvas {
+  z-index: 1 !important;
+  background: transparent !important;
 }
-#status{font-weight:700}
-.small{font-size:12px;opacity:.82;margin-top:4px}
 </style>
+
 <script>
-AFRAME.registerComponent('tracker-hud',{init:function(){
-  const status=document.getElementById('status');
-  const active=new Set();
-  const names=['m1','m2','m3','m4'];
+/*
+  Prototype 1.4 is deliberately only a camera/canvas compositing test.
+  Marker/model transforms are unchanged from 1.3.
+*/
+AFRAME.registerComponent('tracker-hud', {
+  init: function () {
+    const status = document.getElementById('status');
+    const active = new Set();
+    const ids = ['m1','m2','m3','m4'];
 
-  window.addEventListener('camera-init',()=>{
-    status.textContent='Camera ready · point at a fiducial';
-    // AR.js injects the video dynamically. Re-assert its layer after creation.
-    requestAnimationFrame(()=>{
-      const v=document.getElementById('arjs-video');
-      if(v){
-        v.style.setProperty('z-index','0','important');
-        v.style.setProperty('display','block','important');
-        v.style.setProperty('visibility','visible','important');
-        v.style.setProperty('opacity','1','important');
+    const fitLayers = () => {
+      const video = document.getElementById('arjs-video');
+      const canvas = document.querySelector('.a-canvas');
+
+      if (video) {
+        Object.assign(video.style, {
+          position: 'fixed',
+          left: '0px',
+          top: '0px',
+          width: window.innerWidth + 'px',
+          height: window.innerHeight + 'px',
+          maxWidth: 'none',
+          maxHeight: 'none',
+          objectFit: 'cover',
+          zIndex: '0',
+          display: 'block',
+          visibility: 'visible',
+          opacity: '1'
+        });
       }
-    });
-  });
-  window.addEventListener('camera-error',(e)=>{
-    status.textContent='Camera error · reload page';
-    console.error('AR.js camera error',e);
-  });
 
-  names.forEach((id,i)=>{
-    const m=document.getElementById(id);
-    m.addEventListener('markerFound',()=>{
-      active.add(i+1);
-      status.textContent='Tracking FID '+[...active].join(', ');
+      if (canvas) {
+        Object.assign(canvas.style, {
+          position: 'fixed',
+          left: '0px',
+          top: '0px',
+          width: window.innerWidth + 'px',
+          height: window.innerHeight + 'px',
+          maxWidth: 'none',
+          maxHeight: 'none',
+          zIndex: '1',
+          background: 'transparent'
+        });
+      }
+    };
+
+    window.addEventListener('camera-init', () => {
+      status.textContent = 'Camera ready · point at a fiducial';
+      setTimeout(fitLayers, 100);
+      setTimeout(fitLayers, 500);
     });
-    m.addEventListener('markerLost',()=>{
-      active.delete(i+1);
-      status.textContent=active.size ? 'Tracking FID '+[...active].join(', ') : 'Camera live · point at a fiducial';
+    window.addEventListener('arjs-video-loaded', () => {
+      if (!active.size) status.textContent = 'Camera live · point at a fiducial';
+      fitLayers();
     });
-  });
-}});
+    window.addEventListener('resize', fitLayers);
+    window.addEventListener('orientationchange', () => setTimeout(fitLayers, 250));
+
+    ids.forEach((id, i) => {
+      const m = document.getElementById(id);
+      m.addEventListener('markerFound', () => {
+        active.add(i + 1);
+        status.textContent = 'Tracking FID ' + [...active].join(', ');
+      });
+      m.addEventListener('markerLost', () => {
+        active.delete(i + 1);
+        status.textContent = active.size
+          ? 'Tracking FID ' + [...active].join(', ')
+          : 'Camera live · point at a fiducial';
+      });
+    });
+
+    setTimeout(fitLayers, 1000);
+  }
+});
 </script>
 </head>
+
 <body>
 <div id="hud">
   <div id="status">Starting camera…</div>
-  <div class="small">Prototype 1.3 CAMERA TEST · clamp datum 177 × 69 mm · duplicates deliberately retained for this test</div>
+  <div class="small">Prototype 1.4 VIEWPORT TEST · camera + canvas full screen</div>
 </div>
 
 <a-scene
   tracker-hud
   embedded
   vr-mode-ui="enabled:false"
-  renderer="antialias:true; alpha:true; precision:medium"
+  renderer="antialias:true; alpha:true; precision:mediump"
   arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
 
-  <a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
+  <a-assets>
+    <a-asset-item id="clamp" src="clamp.glb"></a-asset-item>
+  </a-assets>
 
-  <!-- Prototype 1.3 changes ONLY the camera/video layering. Old marker transforms remain intentionally unchanged. -->
   <a-marker id="m1" type="pattern" url="fid01.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
     <a-entity gltf-model="#clamp" position="-2.455 0.04 1.560" rotation="0 0 0" scale="0.17170 0.17170 0.17170"></a-entity>
   </a-marker>
+
   <a-marker id="m2" type="pattern" url="fid02.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
     <a-entity gltf-model="#clamp" position="-4.977 0.04 -0.117" rotation="0 0 0" scale="0.17153 0.17153 0.17153"></a-entity>
   </a-marker>
+
   <a-marker id="m3" type="pattern" url="fid03.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
     <a-entity gltf-model="#clamp" position="-2.608 0.04 -1.653" rotation="0 0 0" scale="0.18235 0.18235 0.18235"></a-entity>
   </a-marker>
+
   <a-marker id="m4" type="pattern" url="fid04.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
     <a-entity gltf-model="#clamp" position="2.658 0.04 -0.122" rotation="0 0 0" scale="0.17931 0.17931 0.17931"></a-entity>
   </a-marker>
