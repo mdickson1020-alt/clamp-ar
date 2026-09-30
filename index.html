@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 5.2</title>
+<title>Bench Clamp AR Prototype 5.3</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -36,6 +36,7 @@ a-scene{z-index:1!important;background:transparent!important}
 AFRAME.registerComponent('tracker-hud',{init:function(){
  const scene=this.el,status=document.getElementById('status'),display=document.getElementById('display-video');
  const rig=document.getElementById('clamp-world');
+ rig.object3D.visible=false;
  const markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
  const attach=()=>{const v=document.getElementById('arjs-video');if(v&&v.srcObject&&display.srcObject!==v.srcObject){display.srcObject=v.srcObject;display.play().catch(()=>{});}};
  window.addEventListener('camera-init',()=>setTimeout(attach,50));window.addEventListener('arjs-video-loaded',attach);
@@ -125,9 +126,23 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
        smoothP.lerp(targetP,.32);smoothQ.slerp(targetQ,.28);
      }
      rig.object3D.position.copy(smoothP);rig.object3D.quaternion.copy(smoothQ);
-     rig.object3D.visible=true;lastGood=performance.now();
-   }else if(performance.now()-lastGood>500){
-     rig.object3D.visible=false;havePose=false;status.textContent='MAT LOST';
+     rig.setAttribute('visible',true);
+     rig.object3D.visible=true;
+     rig.object3D.traverse(o=>{o.visible=true;});
+     lastGood=performance.now();
+   }else{
+     const age=performance.now()-lastGood;
+     if(havePose && age<=1200){
+       // Hold the last valid mat pose through short AR.js detector flicker.
+       rig.setAttribute('visible',true);
+       rig.object3D.visible=true;
+       status.textContent='MAT HOLD · '+Math.round(age)+' ms';
+     }else{
+       rig.setAttribute('visible',false);
+       rig.object3D.visible=false;
+       havePose=false;
+       status.textContent='MAT LOST';
+     }
    }
 
    requestAnimationFrame(loop);
@@ -138,7 +153,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.2 · LIVE CONSTELLATION LOCK</div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.3 · PERSISTENT DIRECT RENDER</div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
@@ -147,7 +162,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  <a-marker id="m2" type="pattern" url="fid02.patt" smooth="true" smoothCount="20" smoothTolerance="0.02" smoothThreshold="5"></a-marker>
  <a-marker id="m3" type="pattern" url="fid03.patt" smooth="true" smoothCount="20" smoothTolerance="0.02" smoothThreshold="5"></a-marker>
  <a-marker id="m4" type="pattern" url="fid04.patt" smooth="true" smoothCount="20" smoothTolerance="0.02" smoothThreshold="5"></a-marker>
- <a-entity id="clamp-world" visible="false">
+ <a-entity id="clamp-world" visible="true">
    <a-entity gltf-model="#clamp" rotation="0 0 0" scale="1.25 1.25 1.25"></a-entity>
  </a-entity>
  <a-entity camera></a-entity>
