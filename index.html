@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 5.6</title>
+<title>Bench Clamp AR Prototype 5.7</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -45,9 +45,13 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  rig.setAttribute('visible',false);
  rig.object3D.visible=false;
 
+ // 5.5 diagnostic: mean AR scene scale = 19.437 scene units per physical metre.
+ // Freeze that calibration. Do NOT re-estimate scale every frame.
+ const SCENE_PER_METRE=19.437;
+ const METRES_PER_SCENE=1/SCENE_PER_METRE;
+
  // Surveyed marker-centre coordinates relative to the centre of the
- // 177 x 76 mm clamp footprint. Units here are REAL metres.
- // X = right across the sheet. Z = down the sheet.
+ // 177 x 76 mm clamp footprint. X = right, Z = down the printed sheet.
  const local=[
    new THREE.Vector2( 0.000000,-0.093500), // FID01 TOP
    new THREE.Vector2( 0.145590, 0.000000), // FID02 RIGHT
@@ -69,7 +73,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
    if(display.srcObject) clearInterval(streamTimer);
  },100);
 
- // Keep visible video and WebGL canvas on exactly the same 4:3 cover rectangle.
+ // One 4:3 cover rectangle for BOTH visible camera and WebGL.
  function syncViewport(){
    const source=document.getElementById('arjs-video');
    const canvas=scene.canvas || document.querySelector('.a-canvas');
@@ -120,18 +124,18 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  setTimeout(transparent,500);
 
  const wp=new THREE.Vector3(),wq=new THREE.Quaternion(),ws=new THREE.Vector3();
- const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
  const smoothP=new THREE.Vector3(),smoothQ=new THREE.Quaternion();
-
- let havePose=false;
- let lastGood=0;
- let smoothScale=19.437; // diagnostic result only as a sensible startup seed
+ const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
+ let havePose=false,lastGood=0,goodFrames=0;
 
  function observed(i){
    const o=markers[i].object3D;
    o.updateMatrixWorld(true);
    o.matrixWorld.decompose(wp,wq,ws);
-   return {i:i,p:wp.clone()};
+
+   // AR.js marker translations are empirically in a common scene scale.
+   // Convert to our calibrated physical-metre frame BEFORE doing any geometry.
+   return {i:i,p:wp.clone().multiplyScalar(METRES_PER_SCENE)};
  }
 
  function expectedDistance(i,j){
@@ -140,189 +144,181 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
    return Math.hypot(dx,dz);
  }
 
- function median(values){
-   const a=values.slice().sort((x,y)=>x-y);
-   const n=a.length;
-   return n%2 ? a[(n-1)/2] : (a[n/2-1]+a[n/2])/2;
- }
-
- function estimateScale(obs){
-   const ratios=[];
+ function shapeError(obs){
+   if(obs.length<2) return 999;
+   let worst=0, sum=0, n=0;
    for(let a=0;a<obs.length;a++){
      for(let b=a+1;b<obs.length;b++){
        const e=expectedDistance(obs[a].i,obs[b].i);
-       if(e>0) ratios.push(obs[a].p.distanceTo(obs[b].p)/e);
+       const m=obs[a].p.distanceTo(obs[b].p);
+       const frac=Math.abs(m-e)/e;
+       worst=Math.max(worst,frac);
+       sum+=frac; n++;
      }
    }
-   if(!ratios.length) return null;
-   const scale=median(ratios);
-   const mean=ratios.reduce((x,y)=>x+y,0)/ratios.length;
-   const sd=Math.sqrt(ratios.reduce((x,r)=>x+(r-mean)*(r-mean),0)/ratios.length);
-   return {scale:scale,cv:sd/mean,ratios:ratios};
+   return {worst:worst,mean:sum/Math.max(1,n)};
  }
 
  function solveMat(obs){
    if(obs.length<3) return null;
 
-   const scaleInfo=estimateScale(obs);
-   if(!scaleInfo) return null;
-   const scale=scaleInfo.scale;
-
-   // Centroids in known physical mat coordinates and observed AR coordinates.
    let mx=0,mz=0;
-   const mp=new THREE.Vector3();
+   const centroid=new THREE.Vector3();
    obs.forEach(o=>{
      mx+=local[o.i].x;
      mz+=local[o.i].y;
-     mp.add(o.p);
+     centroid.add(o.p);
    });
    const n=obs.length;
-   mx/=n; mz/=n; mp.multiplyScalar(1/n);
+   mx/=n; mz/=n; centroid.multiplyScalar(1/n);
 
-   // Least-squares directions from real mat X/Z into AR scene coordinates.
    let sxx=0,szz=0,sxz=0;
    const sxp=new THREE.Vector3(),szp=new THREE.Vector3();
 
    obs.forEach(o=>{
      const dx=local[o.i].x-mx;
      const dz=local[o.i].y-mz;
-     const dp=o.p.clone().sub(mp);
+     const dp=o.p.clone().sub(centroid);
      sxx+=dx*dx; szz+=dz*dz; sxz+=dx*dz;
      sxp.addScaledVector(dp,dx);
      szp.addScaledVector(dp,dz);
    });
 
    const det=sxx*szz-sxz*sxz;
-   if(Math.abs(det)<1e-10) return null;
+   if(Math.abs(det)<1e-12) return null;
 
    const ax=sxp.clone().multiplyScalar(szz)
      .addScaledVector(szp,-sxz).multiplyScalar(1/det);
    const az=szp.clone().multiplyScalar(sxx)
      .addScaledVector(sxp,-sxz).multiplyScalar(1/det);
 
-   if(ax.length()<0.001 || az.length()<0.001) return null;
+   if(ax.length()<0.25 || az.length()<0.25) return null;
 
-   // Rigid mat axes. Scale is solved separately from the diagnostic pair distances.
    const xAxis=ax.clone().normalize();
    const zAxis=az.clone().addScaledVector(xAxis,-az.dot(xAxis)).normalize();
-   if(zAxis.length()<0.5) return null;
+   if(zAxis.length()<0.9) return null;
 
-   let yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis).normalize();
-   let zFixed=new THREE.Vector3().crossVectors(xAxis,yAxis).normalize();
-   let xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
-
-   // Keep the mat normal facing the camera to prevent 180-degree plane flips.
-   const cameraPos=new THREE.Vector3();
-   scene.camera.getWorldPosition(cameraPos);
-   const approxCentre=mp.clone()
-     .addScaledVector(xFixed,-scale*mx)
-     .addScaledVector(zFixed,-scale*mz);
-   const toCamera=cameraPos.sub(approxCentre);
-   if(yAxis.dot(toCamera)<0){
-     yAxis.negate();
-     zFixed.negate();
-     xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
-   }
+   const yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis).normalize();
+   const zFixed=new THREE.Vector3().crossVectors(xAxis,yAxis).normalize();
+   const xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
 
    const basis=new THREE.Matrix4().makeBasis(xFixed,yAxis,zFixed);
-   const quat=new THREE.Quaternion().setFromRotationMatrix(basis);
+   const q=new THREE.Quaternion().setFromRotationMatrix(basis);
 
-   // Rigid best-fit centre using the empirically observed scene-units/metre scale.
-   const centre=mp.clone()
-     .addScaledVector(xFixed,-scale*mx)
-     .addScaledVector(zFixed,-scale*mz);
+   // Since observations are already in metres, the best-fit mat centre is metric too.
+   const centre=centroid.clone()
+     .addScaledVector(xFixed,-mx)
+     .addScaledVector(zFixed,-mz);
 
-   // Residual, converted back into physical millimetres.
    let ss=0;
    obs.forEach(o=>{
      const pred=centre.clone()
-       .addScaledVector(xFixed,scale*local[o.i].x)
-       .addScaledVector(zFixed,scale*local[o.i].y);
+       .addScaledVector(xFixed,local[o.i].x)
+       .addScaledVector(zFixed,local[o.i].y);
      ss+=pred.distanceToSquared(o.p);
    });
-   const rmsScene=Math.sqrt(ss/n);
-   const rmsMm=(rmsScene/scale)*1000;
+   const rmsMm=Math.sqrt(ss/n)*1000;
 
-   return {
-     p:centre,
-     q:quat,
-     scale:scale,
-     rmsMm:rmsMm,
-     cv:scaleInfo.cv
-   };
+   return {p:centre,q:q,rmsMm:rmsMm};
+ }
+
+ function subsets3(arr){
+   if(arr.length===3) return [arr];
+   const out=[];
+   for(let a=0;a<arr.length-2;a++)
+    for(let b=a+1;b<arr.length-1;b++)
+     for(let c=b+1;c<arr.length;c++)
+      out.push([arr[a],arr[b],arr[c]]);
+   return out;
+ }
+
+ function chooseConstellation(obs){
+   if(obs.length<3) return null;
+
+   // Prefer all four if their geometry agrees.
+   if(obs.length>=4){
+     const e4=shapeError(obs);
+     if(e4.worst<0.16){
+       const s4=solveMat(obs);
+       if(s4 && s4.rmsMm<25) return {obs:obs,solved:s4,shape:e4};
+     }
+   }
+
+   // Otherwise choose the best three-marker subset. This rejects one rogue marker
+   // instead of throwing away the entire frame.
+   let best=null;
+   subsets3(obs).forEach(sub=>{
+     const sh=shapeError(sub);
+     if(sh.worst>0.18) return;
+     const sol=solveMat(sub);
+     if(!sol || sol.rmsMm>28) return;
+     const score=sol.rmsMm + sh.mean*60;
+     if(!best || score<best.score) best={obs:sub,solved:sol,shape:sh,score:score};
+   });
+   return best;
  }
 
  scene.addEventListener('renderstart',()=>{
    const loop=()=>{
      const obs=[];
-     markers.forEach((m,i)=>{
-       if(m.object3D.visible) obs.push(observed(i));
-     });
+     markers.forEach((m,i)=>{if(m.object3D.visible) obs.push(observed(i));});
+     const chosen=chooseConstellation(obs);
 
-     const solved=obs.length>=3 ? solveMat(obs) : null;
-     const valid=solved &&
-       solved.scale>10 && solved.scale<30 &&
-       solved.cv<0.15 &&
-       solved.rmsMm<25;
+     if(chosen){
+       targetP.copy(chosen.solved.p);
+       targetQ.copy(chosen.solved.q);
 
-     if(valid){
-       targetP.copy(solved.p);
-       targetQ.copy(solved.q);
-
-       if(!havePose){
-         smoothP.copy(targetP);
-         smoothQ.copy(targetQ);
-         smoothScale=solved.scale;
-         havePose=true;
-       }else{
-         // Avoid quaternion hemisphere flips before interpolation.
-         if(smoothQ.dot(targetQ)<0){
-           targetQ.set(-targetQ.x,-targetQ.y,-targetQ.z,-targetQ.w);
-         }
-         smoothP.lerp(targetP,.30);
-         smoothQ.slerp(targetQ,.25);
-         smoothScale += (solved.scale-smoothScale)*.25;
+       // Keep quaternion interpolation on the same hemisphere.
+       if(havePose && smoothQ.dot(targetQ)<0){
+         targetQ.set(-targetQ.x,-targetQ.y,-targetQ.z,-targetQ.w);
        }
 
-       rig.object3D.position.copy(smoothP);
-       rig.object3D.quaternion.copy(smoothQ);
+       goodFrames++;
+       if(goodFrames>=3){
+         if(!havePose){
+           smoothP.copy(targetP);
+           smoothQ.copy(targetQ);
+           havePose=true;
+         }else{
+           // Single smoothing stage, after robust rigid solve.
+           smoothP.lerp(targetP,.34);
+           smoothQ.slerp(targetQ,.30);
+         }
 
-       // GLB is 1.77 units long. Desired physical length is 0.177 m.
-       // Therefore model scalar = AR scene-units/metre * 0.1.
-       const modelScale=smoothScale*0.1;
-       model.object3D.scale.setScalar(modelScale);
+         rig.object3D.position.copy(smoothP);
+         rig.object3D.quaternion.copy(smoothQ);
+         rig.setAttribute('visible',true);
+         rig.object3D.visible=true;
+         lastGood=performance.now();
 
-       rig.setAttribute('visible',true);
-       rig.object3D.visible=true;
-       lastGood=performance.now();
-
-       status.textContent='PHYSICAL MAT LOCK · '+obs.length+' markers';
-       diag.textContent=
-         'scale '+solved.scale.toFixed(3)+' scene/m'+
-         '   RMS '+solved.rmsMm.toFixed(1)+' mm'+
-         '   spread '+(solved.cv*100).toFixed(1)+'%\n'+
-         'clamp scale '+modelScale.toFixed(3)+'   target 177 × 76 mm';
+         status.textContent='RIGID MAT LOCK · '+chosen.obs.length+
+           ' of '+obs.length+' markers';
+         diag.textContent=
+           'fixed scale 19.437 scene/m'+
+           '   RMS '+chosen.solved.rmsMm.toFixed(1)+' mm'+
+           '   worst '+(chosen.shape.worst*100).toFixed(1)+'%\n'+
+           'clamp 177 × 76 mm · physical scale locked';
+       }
      }else{
+       goodFrames=0;
        const age=performance.now()-lastGood;
 
-       if(havePose && age<900){
+       if(havePose && age<1200){
+         // Hold last GOOD rigid pose. Never invent a pose from 1-2 markers.
          rig.setAttribute('visible',true);
          rig.object3D.visible=true;
          status.textContent='MAT HOLD · '+obs.length+' seen · '+Math.round(age)+' ms';
+         diag.textContent='Holding last validated 3/4-marker pose.';
        }else{
          rig.setAttribute('visible',false);
          rig.object3D.visible=false;
          havePose=false;
-
-         if(solved){
-           status.textContent='REJECTED FIT · '+obs.length+' markers';
-           diag.textContent=
-             'scale '+solved.scale.toFixed(3)+' scene/m'+
-             '   RMS '+solved.rmsMm.toFixed(1)+' mm'+
-             '   spread '+(solved.cv*100).toFixed(1)+'%';
+         status.textContent='Need valid 3-marker geometry · '+obs.length+' seen';
+         if(obs.length>=3){
+           const sh=shapeError(obs);
+           diag.textContent='geometry rejected · worst pair error '+(sh.worst*100).toFixed(1)+'%';
          }else{
-           status.textContent='Need 3 markers · '+obs.length+' seen';
-           diag.textContent='Waiting for a non-collinear 3-marker constellation.';
+           diag.textContent='Bring at least 3 fiducials into view.';
          }
        }
      }
@@ -336,18 +332,19 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.6 · NORMALISED PHYSICAL MAT SOLVER</div><div id="diag"></div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.7 · FIXED-SCALE RIGID MAT LOCK</div><div id="diag"></div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
- arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
+ arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono;">
  <a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
  <a-marker id="m1" type="pattern" url="fid01.patt" size="0.05824" smooth="false"></a-marker>
  <a-marker id="m2" type="pattern" url="fid02.patt" size="0.05830" smooth="false"></a-marker>
  <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false"></a-marker>
  <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false"></a-marker>
  <a-entity id="clamp-world" visible="false">
-   <a-entity id="clamp-model" gltf-model="#clamp" position="0 0 0" rotation="0 0 0"
-             scale="1.9437 1.9437 1.9437"></a-entity>
+   <a-entity id="clamp-model" gltf-model="#clamp"
+             position="0 0.002 0" rotation="0 0 0"
+             scale="0.1 0.1 0.1"></a-entity>
  </a-entity>
  <a-entity camera></a-entity>
 </a-scene>
