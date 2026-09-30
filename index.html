@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 2.1</title>
+<title>Bench Clamp AR Prototype 2.2</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -105,22 +105,22 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 2.1 · SPLIT DISPLAY/TRACKING VIDEO</div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 2.2 · FID01 SCALE TEST · target clamp length 177 mm</div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
  <a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
  <a-marker id="m1" type="pattern" url="fid01.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-   <a-entity gltf-model="#clamp" position="-2.455 0.04 1.560" scale="0.17170 0.17170 0.17170"></a-entity>
+   <!-- Scale-only calibration: clamp centered on FID01. 177 mm / 58.24 mm = 3.0398 marker widths.
+        GLB length = 1.77 units, therefore initial empirical scale = 1.71742. -->
+   <a-entity gltf-model="#clamp" position="0 0.03 0" rotation="0 0 0"
+             scale="1.71742 1.71742 1.71742"></a-entity>
  </a-marker>
  <a-marker id="m2" type="pattern" url="fid02.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-   <a-entity gltf-model="#clamp" position="-4.977 0.04 -0.117" scale="0.17153 0.17153 0.17153"></a-entity>
  </a-marker>
  <a-marker id="m3" type="pattern" url="fid03.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-   <a-entity gltf-model="#clamp" position="-2.608 0.04 -1.653" scale="0.18235 0.18235 0.18235"></a-entity>
  </a-marker>
  <a-marker id="m4" type="pattern" url="fid04.patt" smooth="true" smoothCount="5" smoothTolerance="0.01" smoothThreshold="2">
-   <a-entity gltf-model="#clamp" position="2.658 0.04 -0.122" scale="0.17931 0.17931 0.17931"></a-entity>
  </a-marker>
  <a-entity camera></a-entity>
 </a-scene>
