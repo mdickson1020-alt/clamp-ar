@@ -2,192 +2,60 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Bench Clamp AR Registration Prototype</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Bench Clamp AR Prototype 1.8</title>
+
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
+
 <style>
-html, body {
-  margin: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  overflow: hidden !important;
-  background: transparent !important;
-  font-family: system-ui, Arial, sans-serif;
+html,body {
+  margin:0;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background:#000;
+  font-family:system-ui,Arial,sans-serif;
 }
 #hud {
-  position: fixed;
-  z-index: 10000;
-  left: 10px; right: 10px; top: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(0,0,0,.68);
-  color: #fff;
-  font-size: 14px;
-  pointer-events: none;
+  position:fixed;
+  z-index:10000;
+  left:10px;
+  right:10px;
+  top:10px;
+  padding:10px 12px;
+  border-radius:10px;
+  background:rgba(0,0,0,.68);
+  color:#fff;
+  font-size:14px;
+  pointer-events:none;
 }
-#status { font-weight: 700; }
-.small { font-size: 11px; opacity: .88; margin-top: 4px; line-height:1.35; overflow-wrap:anywhere; }
-
-/* 1.4: force BOTH AR.js video and A-Frame canvas onto the same viewport. */
-#arjs-video {
-  position: fixed !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  max-width: none !important;
-  max-height: none !important;
-  object-fit: cover !important;
-  z-index: 0 !important;
-  display: block !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-}
-
-a-scene,
-.a-canvas {
-  position: fixed !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  max-width: none !important;
-  max-height: none !important;
-}
-
-a-scene { z-index: 1 !important; }
-.a-enter-vr, .a-enter-ar { display:none !important; }
-body > div:not(#hud) { max-width:none !important; }
-.a-canvas {
-  z-index: 1 !important;
-  background: transparent !important;
-}
+#status { font-weight:700; }
+.small { font-size:12px; opacity:.82; margin-top:4px; }
+.a-enter-vr,.a-enter-ar { display:none !important; }
 </style>
 
 <script>
-/*
-  Prototype 1.7 instruments browser, video, canvas and renderer dimensions.
-  Marker/model transforms are unchanged from 1.3.
-*/
-AFRAME.registerComponent('tracker-hud', {
-  init: function () {
-    const status = document.getElementById('status');
-    const active = new Set();
-    const ids = ['m1','m2','m3','m4'];
-
-    const fitLayers = () => {
-      const video = document.getElementById('arjs-video');
-      const canvas = document.querySelector('.a-canvas');
-
-      if (video) {
-        Object.assign(video.style, {
-          position: 'fixed',
-          left: '0px',
-          top: '0px',
-          width: window.innerWidth + 'px',
-          height: window.innerHeight + 'px',
-          maxWidth: 'none',
-          maxHeight: 'none',
-          objectFit: 'cover',
-          zIndex: '0',
-          display: 'block',
-          visibility: 'visible',
-          opacity: '1'
-        });
-      }
-
-      if (canvas) {
-        Object.assign(canvas.style, {
-          position: 'fixed',
-          left: '0px',
-          top: '0px',
-          width: window.innerWidth + 'px',
-          height: window.innerHeight + 'px',
-          maxWidth: 'none',
-          maxHeight: 'none',
-          zIndex: '1',
-          background: 'transparent'
-        });
-        canvas.width = Math.round(window.innerWidth * (window.devicePixelRatio || 1));
-        canvas.height = Math.round(window.innerHeight * (window.devicePixelRatio || 1));
-      }
-
-      const scene = document.querySelector('a-scene');
-      if (scene) {
-        Object.assign(scene.style, {
-          position: 'fixed',
-          left: '0px',
-          top: '0px',
-          width: window.innerWidth + 'px',
-          height: window.innerHeight + 'px',
-          maxWidth: 'none',
-          maxHeight: 'none',
-          margin: '0',
-          padding: '0'
-        });
-        if (scene.renderer) {
-          scene.renderer.setPixelRatio(window.devicePixelRatio || 1);
-          scene.renderer.setSize(window.innerWidth, window.innerHeight, false);
-        }
-        if (scene.camera) {
-          scene.camera.aspect = window.innerWidth / window.innerHeight;
-          scene.camera.updateProjectionMatrix();
-        }
-        scene.resize();
-      }
-    };
-
-    window.addEventListener('camera-init', () => {
-      status.textContent = 'Camera ready · point at a fiducial';
-      setTimeout(fitLayers, 100);
-      setTimeout(fitLayers, 500);
-    });
-    window.addEventListener('arjs-video-loaded', () => {
-      if (!active.size) status.textContent = 'Camera live · point at a fiducial';
-      fitLayers();
-    });
-    window.addEventListener('resize', fitLayers);
-    window.addEventListener('orientationchange', () => setTimeout(fitLayers, 250));
-
-    ids.forEach((id, i) => {
-      const m = document.getElementById(id);
-      m.addEventListener('markerFound', () => {
-        active.add(i + 1);
-        status.textContent = 'Tracking FID ' + [...active].join(', ');
+AFRAME.registerComponent('tracker-hud',{
+  init:function(){
+    const status=document.getElementById('status');
+    const active=new Set();
+    ['m1','m2','m3','m4'].forEach((id,i)=>{
+      const m=document.getElementById(id);
+      m.addEventListener('markerFound',()=>{
+        active.add(i+1);
+        status.textContent='Tracking FID '+[...active].join(', ');
       });
-      m.addEventListener('markerLost', () => {
-        active.delete(i + 1);
-        status.textContent = active.size
-          ? 'Tracking FID ' + [...active].join(', ')
+      m.addEventListener('markerLost',()=>{
+        active.delete(i+1);
+        status.textContent=active.size
+          ? 'Tracking FID '+[...active].join(', ')
           : 'Camera live · point at a fiducial';
       });
     });
-
-
-    const updateDiag = () => {
-      const d = document.getElementById('diag');
-      const v = document.getElementById('arjs-video');
-      const c = document.querySelector('.a-canvas');
-      const scene = document.querySelector('a-scene');
-      const vv = window.visualViewport;
-      const r = scene && scene.renderer;
-      const size = r ? r.getSize(new THREE.Vector2()) : null;
-      const rect = v ? v.getBoundingClientRect() : null;
-      const crect = c ? c.getBoundingClientRect() : null;
-      if (d) d.innerHTML =
-        'inner ' + innerWidth + '×' + innerHeight +
-        ' | screen ' + screen.width + '×' + screen.height +
-        ' | vv ' + (vv ? Math.round(vv.width)+'×'+Math.round(vv.height) : 'n/a') +
-        '<br>video intrinsic ' + (v ? v.videoWidth+'×'+v.videoHeight : 'n/a') +
-        ' | video CSS ' + (rect ? Math.round(rect.width)+'×'+Math.round(rect.height) : 'n/a') +
-        '<br>canvas CSS ' + (crect ? Math.round(crect.width)+'×'+Math.round(crect.height) : 'n/a') +
-        ' | buffer ' + (c ? c.width+'×'+c.height : 'n/a') +
-        ' | renderer ' + (size ? Math.round(size.x)+'×'+Math.round(size.y) : 'n/a') +
-        ' | DPR ' + window.devicePixelRatio;
-    };
-    setInterval(updateDiag, 500);
-    setTimeout(updateDiag, 1200);
-
-        setTimeout(fitLayers, 1000);
+    window.addEventListener('camera-init',()=>{
+      status.textContent='Camera live · point at a fiducial';
+    });
   }
 });
 </script>
@@ -196,7 +64,7 @@ AFRAME.registerComponent('tracker-hud', {
 <body>
 <div id="hud">
   <div id="status">Starting camera…</div>
-  <div class="small">Prototype 1.7 DIAGNOSTIC · <span id="diag">collecting dimensions…</span></div>
+  <div class="small">Prototype 1.8 · VIDEO TEXTURE · full viewport</div>
 </div>
 
 <a-scene
@@ -204,7 +72,7 @@ AFRAME.registerComponent('tracker-hud', {
   embedded
   vr-mode-ui="enabled:false"
   renderer="antialias:true; alpha:true; precision:mediump"
-  arjs="sourceType:webcam; sourceWidth:480; sourceHeight:640; displayWidth:480; displayHeight:640; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
+  arjs="sourceType:webcam; videoTexture:true; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
 
   <a-assets>
     <a-asset-item id="clamp" src="clamp.glb"></a-asset-item>
