@@ -27,7 +27,7 @@ html, body {
   pointer-events: none;
 }
 #status { font-weight: 700; }
-.small { font-size: 12px; opacity: .82; margin-top: 4px; }
+.small { font-size: 11px; opacity: .88; margin-top: 4px; line-height:1.35; overflow-wrap:anywhere; }
 
 /* 1.4: force BOTH AR.js video and A-Frame canvas onto the same viewport. */
 #arjs-video {
@@ -65,7 +65,7 @@ body > div:not(#hud) { max-width:none !important; }
 
 <script>
 /*
-  Prototype 1.6 tests AR.js portrait source/display dimensions rather than post-hoc CSS resizing.
+  Prototype 1.7 instruments browser, video, canvas and renderer dimensions.
   Marker/model transforms are unchanged from 1.3.
 */
 AFRAME.registerComponent('tracker-hud', {
@@ -162,7 +162,32 @@ AFRAME.registerComponent('tracker-hud', {
       });
     });
 
-    setTimeout(fitLayers, 1000);
+
+    const updateDiag = () => {
+      const d = document.getElementById('diag');
+      const v = document.getElementById('arjs-video');
+      const c = document.querySelector('.a-canvas');
+      const scene = document.querySelector('a-scene');
+      const vv = window.visualViewport;
+      const r = scene && scene.renderer;
+      const size = r ? r.getSize(new THREE.Vector2()) : null;
+      const rect = v ? v.getBoundingClientRect() : null;
+      const crect = c ? c.getBoundingClientRect() : null;
+      if (d) d.innerHTML =
+        'inner ' + innerWidth + '×' + innerHeight +
+        ' | screen ' + screen.width + '×' + screen.height +
+        ' | vv ' + (vv ? Math.round(vv.width)+'×'+Math.round(vv.height) : 'n/a') +
+        '<br>video intrinsic ' + (v ? v.videoWidth+'×'+v.videoHeight : 'n/a') +
+        ' | video CSS ' + (rect ? Math.round(rect.width)+'×'+Math.round(rect.height) : 'n/a') +
+        '<br>canvas CSS ' + (crect ? Math.round(crect.width)+'×'+Math.round(crect.height) : 'n/a') +
+        ' | buffer ' + (c ? c.width+'×'+c.height : 'n/a') +
+        ' | renderer ' + (size ? Math.round(size.x)+'×'+Math.round(size.y) : 'n/a') +
+        ' | DPR ' + window.devicePixelRatio;
+    };
+    setInterval(updateDiag, 500);
+    setTimeout(updateDiag, 1200);
+
+        setTimeout(fitLayers, 1000);
   }
 });
 </script>
@@ -171,7 +196,7 @@ AFRAME.registerComponent('tracker-hud', {
 <body>
 <div id="hud">
   <div id="status">Starting camera…</div>
-  <div class="small">Prototype 1.6 PORTRAIT SOURCE TEST · 480×640 source</div>
+  <div class="small">Prototype 1.7 DIAGNOSTIC · <span id="diag">collecting dimensions…</span></div>
 </div>
 
 <a-scene
