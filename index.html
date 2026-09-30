@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 5.0</title>
+<title>Bench Clamp AR Prototype 5.1</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -43,116 +43,118 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  window.addEventListener('arjs-video-loaded',attach);
  const q=setInterval(()=>{attach();if(display.srcObject)clearInterval(q)},100);
 
- /*
-   5.0 rule: no marker is trusted by itself.
-   Each visible marker predicts the SAME mat-centre pose.
-   We only render when at least two predictions agree geometrically.
-   This rejects the false-positive "markers" seen on classroom objects.
- */
- const off=[
-   [new THREE.Vector3(0,.025, 1.60543),0],          // FID01 top
-   [new THREE.Vector3(-2.56304,.025,0),-Math.PI/2],// FID02 right
-   [new THREE.Vector3(0,.025,-1.72028),Math.PI],   // FID03 bottom
-   [new THREE.Vector3(2.64936,.025,0),Math.PI/2]   // FID04 left
- ];
- const yaxis=new THREE.Vector3(0,1,0);
  const mp=new THREE.Vector3(),mq=new THREE.Quaternion(),ms=new THREE.Vector3();
- const ro=new THREE.Vector3(),pp=new THREE.Vector3(),lq=new THREE.Quaternion(),qq=new THREE.Quaternion();
- const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
-
- let goodFrames=0,badFrames=0,lastP=new THREE.Vector3(),lastQ=new THREE.Quaternion(),havePose=false;
+ const centre=new THREE.Vector3(),targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
+ const relPos=[null,null,null,null], relQuat=[null,null,null,null];
+ let calibrated=false,calFrames=0,lastGood=0;
+ let smoothP=new THREE.Vector3(),smoothQ=new THREE.Quaternion(),havePose=false;
 
  const transparent=()=>{if(scene.renderer){scene.renderer.setClearColor(0,0);scene.renderer.setClearAlpha(0);scene.renderer.domElement.style.background='transparent';}};
  scene.addEventListener('render-target-loaded',transparent);setTimeout(transparent,500);
 
- function markerPose(m,i){
+ function getPose(i){
+   const m=markers[i];
    m.object3D.updateMatrixWorld(true);
    m.object3D.matrixWorld.decompose(mp,mq,ms);
-   ro.copy(off[i][0]).applyQuaternion(mq);
-   pp.copy(mp).add(ro);
-   lq.setFromAxisAngle(yaxis,off[i][1]);
-   qq.copy(mq).multiply(lq);
-   return {i:i,p:pp.clone(),q:qq.clone()};
+   return {i,p:mp.clone(),q:mq.clone()};
  }
-
- function angleBetween(a,b){
-   let d=Math.abs(a.dot(b)); d=Math.min(1,Math.max(-1,d));
-   return 2*Math.acos(d);
+ function avgQuat(arr){
+   let q=arr[0].clone();
+   for(let k=1;k<arr.length;k++){
+     const x=arr[k].clone();
+     if(q.dot(x)<0)x.set(-x.x,-x.y,-x.z,-x.w);
+     q.slerp(x,1/(k+1));
+   }
+   return q;
  }
 
  scene.addEventListener('renderstart',()=>{
-   const loop=()=>{
-     const raw=[];
-     markers.forEach((m,i)=>{if(m.object3D.visible) raw.push(markerPose(m,i));});
+  const loop=()=>{
+   const vis=[];
+   markers.forEach((m,i)=>{if(m.object3D.visible)vis.push(getPose(i));});
 
-     // Find the largest mutually-consistent cluster.
-     // Position threshold is deliberately generous for first calibration;
-     // orientation threshold rejects flipped/false marker solutions.
-     let best=[];
-     for(let seed=0;seed<raw.length;seed++){
-       const cluster=[raw[seed]];
-       for(let j=0;j<raw.length;j++){
-         if(j===seed)continue;
-         const pd=raw[seed].p.distanceTo(raw[j].p);
-         const ad=angleBetween(raw[seed].q,raw[j].q);
-         if(pd<0.85 && ad<0.65) cluster.push(raw[j]); // ~37 degrees
-       }
-       if(cluster.length>best.length) best=cluster;
-     }
+   if(!calibrated){
+     // Calibration needs all four genuine markers together for a short, stable burst.
+     if(vis.length===4){
+       calFrames++;
+       status.textContent='CALIBRATING MAT · '+Math.min(calFrames,20)+'/20';
+       if(calFrames>=20){
+         centre.set(0,0,0);vis.forEach(x=>centre.add(x.p));centre.multiplyScalar(.25);
 
-     if(best.length>=2){
-       targetP.set(0,0,0);
-       best.forEach(x=>targetP.add(x.p));
-       targetP.multiplyScalar(1/best.length);
+         // Define the mat orientation from the physical constellation itself:
+         // X axis = left marker (FID04) -> right marker (FID02)
+         // Z axis = top marker (FID01) -> bottom marker (FID03)
+         const by={};vis.forEach(x=>by[x.i]=x);
+         const xAxis=by[1].p.clone().sub(by[3].p).normalize();
+         const zAxis=by[2].p.clone().sub(by[0].p).normalize();
+         let yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis).normalize();
+         // Re-orthogonalise X against Y/Z.
+         const zz=new THREE.Vector3().crossVectors(xAxis,yAxis).normalize();
+         const xx=new THREE.Vector3().crossVectors(yAxis,zz).normalize();
+         const mat=new THREE.Matrix4().makeBasis(xx,yAxis,zz);
+         targetQ.setFromRotationMatrix(mat);
 
-       targetQ.copy(best[0].q);
-       for(let k=1;k<best.length;k++){
-         const qk=best[k].q.clone();
-         if(targetQ.dot(qk)<0)qk.set(-qk.x,-qk.y,-qk.z,-qk.w);
-         targetQ.slerp(qk,1/(k+1));
-       }
-
-       // Require several consecutive valid frames before appearing.
-       goodFrames++; badFrames=0;
-       if(goodFrames>=5){
-         if(!havePose){
-           lastP.copy(targetP); lastQ.copy(targetQ); havePose=true;
-         }else{
-           // Limit single-frame leaps before smoothing.
-           const jump=lastP.distanceTo(targetP);
-           if(jump<0.45){
-             lastP.lerp(targetP,.22);
-             lastQ.slerp(targetQ,.18);
-           }
-         }
-         rig.object3D.position.copy(lastP);
-         rig.object3D.quaternion.copy(lastQ);
-         rig.object3D.visible=true;
-         status.textContent='RIGID MAT LOCK · '+best.length+' agreeing markers';
-       }else{
-         status.textContent='Confirming mat · '+best.length+' markers';
+         // Store each marker's measured transform relative to this mat pose.
+         const invQ=targetQ.clone().invert();
+         vis.forEach(x=>{
+           relPos[x.i]=x.p.clone().sub(centre).applyQuaternion(invQ);
+           relQuat[x.i]=invQ.clone().multiply(x.q);
+         });
+         calibrated=true;havePose=false;lastGood=performance.now();
+         status.textContent='CALIBRATED · move camera';
        }
      }else{
-       goodFrames=0; badFrames++;
-       status.textContent=raw.length
-         ? 'NO LOCK · markers disagree ('+raw.length+' seen)'
-         : 'Point camera at mat';
-       // Short dropout tolerance only. Never let a stale clamp wander the room.
-       if(badFrames>12){
-         rig.object3D.visible=false;
-         havePose=false;
-       }
+       calFrames=0;
+       status.textContent='Show all 4 markers to calibrate ('+vis.length+'/4)';
      }
-     requestAnimationFrame(loop);
-   };
+     rig.object3D.visible=false;
+     requestAnimationFrame(loop);return;
+   }
+
+   // After calibration, every visible marker predicts the SAME mat centre/orientation.
+   const predictions=[];
+   vis.forEach(x=>{
+     if(!relPos[x.i]||!relQuat[x.i])return;
+     const matQ=x.q.clone().multiply(relQuat[x.i].clone().invert());
+     const matP=x.p.clone().sub(relPos[x.i].clone().applyQuaternion(matQ));
+     predictions.push({p:matP,q:matQ});
+   });
+
+   if(predictions.length){
+     targetP.set(0,0,0);predictions.forEach(x=>targetP.add(x.p));targetP.multiplyScalar(1/predictions.length);
+     targetQ.copy(avgQuat(predictions.map(x=>x.q)));
+
+     // Reject predictions far from the consensus, then average again.
+     const kept=predictions.filter(x=>x.p.distanceTo(targetP)<0.55);
+     if(kept.length){
+       targetP.set(0,0,0);kept.forEach(x=>targetP.add(x.p));targetP.multiplyScalar(1/kept.length);
+       targetQ.copy(avgQuat(kept.map(x=>x.q)));
+
+       if(!havePose){smoothP.copy(targetP);smoothQ.copy(targetQ);havePose=true;}
+       else{
+         const jump=smoothP.distanceTo(targetP);
+         if(jump<0.6){smoothP.lerp(targetP,.18);smoothQ.slerp(targetQ,.16);}
+       }
+       rig.object3D.position.copy(smoothP);
+       rig.object3D.quaternion.copy(smoothQ);
+       rig.object3D.visible=true;
+       lastGood=performance.now();
+       status.textContent='MAT LOCK · '+kept.length+' marker'+(kept.length===1?'':'s');
+     }
+   }else if(performance.now()-lastGood>700){
+     rig.object3D.visible=false;havePose=false;status.textContent='Mat lost';
+   }
+
    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
  });
 }});
 </script>
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.0 · RIGID MAT LOCK · validated constellation</div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.1 · SELF-CALIBRATING CONSTELLATION</div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono_and_matrix; matrixCodeType:3x3;">
