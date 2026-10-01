@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 5.7</title>
+<title>Bench Clamp AR Prototype 5.8</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -39,26 +39,35 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  const diag=document.getElementById('diag');
  const display=document.getElementById('display-video');
  const rig=document.getElementById('clamp-world');
+ const pivot=document.getElementById('clamp-pivot');
  const model=document.getElementById('clamp-model');
  const markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
 
  rig.setAttribute('visible',false);
  rig.object3D.visible=false;
 
- // 5.5 diagnostic: mean AR scene scale = 19.437 scene units per physical metre.
- // Freeze that calibration. Do NOT re-estimate scale every frame.
+ // Proven by the 5.5 constellation diagnostic.
  const SCENE_PER_METRE=19.437;
- const METRES_PER_SCENE=1/SCENE_PER_METRE;
 
- // Surveyed marker-centre coordinates relative to the centre of the
- // 177 x 76 mm clamp footprint. X = right, Z = down the printed sheet.
- const local=[
+ // Real surveyed marker-centre positions relative to the centre of the
+ // 177 x 76 mm printed footprint. X=right, Z=down the sheet.
+ const localM=[
    new THREE.Vector2( 0.000000,-0.093500), // FID01 TOP
    new THREE.Vector2( 0.145590, 0.000000), // FID02 RIGHT
    new THREE.Vector2( 0.000000, 0.093650), // FID03 BOTTOM
    new THREE.Vector2(-0.146765, 0.000000)  // FID04 LEFT
  ];
+ const local=localM.map(v=>new THREE.Vector2(
+   v.x*SCENE_PER_METRE,
+   v.y*SCENE_PER_METRE
+ ));
 
+ const TARGET_LENGTH_M=0.177;
+ const TARGET_WIDTH_M=0.076;
+ const TARGET_LENGTH_SCENE=TARGET_LENGTH_M*SCENE_PER_METRE;
+ const TARGET_WIDTH_SCENE=TARGET_WIDTH_M*SCENE_PER_METRE;
+
+ // -------- Camera/display plumbing: preserved from the known-good branch --------
  const attachDisplay=()=>{
    const source=document.getElementById('arjs-video');
    if(source && source.srcObject && display.srcObject!==source.srcObject){
@@ -73,7 +82,6 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
    if(display.srcObject) clearInterval(streamTimer);
  },100);
 
- // One 4:3 cover rectangle for BOTH visible camera and WebGL.
  function syncViewport(){
    const source=document.getElementById('arjs-video');
    const canvas=scene.canvas || document.querySelector('.a-canvas');
@@ -123,6 +131,56 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  scene.addEventListener('render-target-loaded',transparent);
  setTimeout(transparent,500);
 
+ // -------- Auto-datum the GLB itself --------
+ // The mesh is centred automatically in X/Z and its lowest Y point is placed
+ // exactly on the mat plane. Its longest horizontal dimension is aligned with
+ // the 177 mm printed rectangle and scaled from the actual GLB bounding box.
+ let modelReady=false;
+ let modelInfo='model loading';
+
+ model.addEventListener('model-loaded',()=>{
+   const mesh=model.getObject3D('mesh');
+   if(!mesh) return;
+
+   model.object3D.position.set(0,0,0);
+   pivot.object3D.rotation.set(0,0,0);
+   pivot.object3D.scale.set(1,1,1);
+   scene.object3D.updateMatrixWorld(true);
+
+   const box=new THREE.Box3().setFromObject(mesh);
+   const size=new THREE.Vector3();
+   const centre=new THREE.Vector3();
+   box.getSize(size);
+   box.getCenter(centre);
+
+   // Datum the raw GLB: footprint centre at X/Z=0, bottom surface at Y=0.
+   model.object3D.position.set(-centre.x,-box.min.y,-centre.z);
+
+   const xIsLong=size.x>=size.z;
+   const longExtent=xIsLong ? size.x : size.z;
+   const widthExtent=xIsLong ? size.z : size.x;
+
+   // If the GLB's long horizontal axis happens to be Z, rotate it onto mat X.
+   const yaw=xIsLong ? 0 : Math.PI/2;
+   pivot.object3D.rotation.set(0,yaw,0);
+
+   // Physical model scale comes directly from the actual loaded GLB bounds.
+   const physicalScale=TARGET_LENGTH_SCENE/longExtent;
+   pivot.object3D.scale.setScalar(physicalScale);
+
+   const resultingWidthM=(widthExtent*physicalScale)/SCENE_PER_METRE;
+   const resultingHeightM=(size.y*physicalScale)/SCENE_PER_METRE;
+
+   modelInfo=
+     'GLB '+size.x.toFixed(3)+'×'+size.y.toFixed(3)+'×'+size.z.toFixed(3)+
+     ' · model scale '+physicalScale.toFixed(3)+
+     ' · width '+(resultingWidthM*1000).toFixed(1)+' mm'+
+     ' · height '+(resultingHeightM*1000).toFixed(1)+' mm';
+
+   modelReady=true;
+ });
+
+ // -------- Rigid mat solver, kept in AR.js native scene units --------
  const wp=new THREE.Vector3(),wq=new THREE.Quaternion(),ws=new THREE.Vector3();
  const smoothP=new THREE.Vector3(),smoothQ=new THREE.Quaternion();
  const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
@@ -132,10 +190,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
    const o=markers[i].object3D;
    o.updateMatrixWorld(true);
    o.matrixWorld.decompose(wp,wq,ws);
-
-   // AR.js marker translations are empirically in a common scene scale.
-   // Convert to our calibrated physical-metre frame BEFORE doing any geometry.
-   return {i:i,p:wp.clone().multiplyScalar(METRES_PER_SCENE)};
+   return {i:i,p:wp.clone()};
  }
 
  function expectedDistance(i,j){
@@ -145,8 +200,8 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  }
 
  function shapeError(obs){
-   if(obs.length<2) return 999;
-   let worst=0, sum=0, n=0;
+   if(obs.length<2) return {worst:999,mean:999};
+   let worst=0,sum=0,n=0;
    for(let a=0;a<obs.length;a++){
      for(let b=a+1;b<obs.length;b++){
        const e=expectedDistance(obs[a].i,obs[b].i);
@@ -185,7 +240,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
    });
 
    const det=sxx*szz-sxz*sxz;
-   if(Math.abs(det)<1e-12) return null;
+   if(Math.abs(det)<1e-10) return null;
 
    const ax=sxp.clone().multiplyScalar(szz)
      .addScaledVector(szp,-sxz).multiplyScalar(1/det);
@@ -205,7 +260,6 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
    const basis=new THREE.Matrix4().makeBasis(xFixed,yAxis,zFixed);
    const q=new THREE.Quaternion().setFromRotationMatrix(basis);
 
-   // Since observations are already in metres, the best-fit mat centre is metric too.
    const centre=centroid.clone()
      .addScaledVector(xFixed,-mx)
      .addScaledVector(zFixed,-mz);
@@ -217,7 +271,9 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
        .addScaledVector(zFixed,local[o.i].y);
      ss+=pred.distanceToSquared(o.p);
    });
-   const rmsMm=Math.sqrt(ss/n)*1000;
+
+   const rmsScene=Math.sqrt(ss/n);
+   const rmsMm=(rmsScene/SCENE_PER_METRE)*1000;
 
    return {p:centre,q:q,rmsMm:rmsMm};
  }
@@ -235,40 +291,51 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  function chooseConstellation(obs){
    if(obs.length<3) return null;
 
-   // Prefer all four if their geometry agrees.
    if(obs.length>=4){
      const e4=shapeError(obs);
-     if(e4.worst<0.16){
-       const s4=solveMat(obs);
-       if(s4 && s4.rmsMm<25) return {obs:obs,solved:s4,shape:e4};
+     const s4=e4.worst<0.18 ? solveMat(obs) : null;
+     if(s4 && s4.rmsMm<28){
+       return {obs:obs,solved:s4,shape:e4};
      }
    }
 
-   // Otherwise choose the best three-marker subset. This rejects one rogue marker
-   // instead of throwing away the entire frame.
    let best=null;
    subsets3(obs).forEach(sub=>{
      const sh=shapeError(sub);
-     if(sh.worst>0.18) return;
+     if(sh.worst>0.20) return;
      const sol=solveMat(sub);
-     if(!sol || sol.rmsMm>28) return;
-     const score=sol.rmsMm + sh.mean*60;
-     if(!best || score<best.score) best={obs:sub,solved:sol,shape:sh,score:score};
+     if(!sol || sol.rmsMm>30) return;
+     const score=sol.rmsMm + sh.mean*55;
+     if(!best || score<best.score){
+       best={obs:sub,solved:sol,shape:sh,score:score};
+     }
    });
    return best;
+ }
+
+ // Adaptive temporal filter: resist tiny tracking noise, but follow intentional
+ // camera movement quickly. Only the FINAL rigid pose is filtered.
+ function filteredAlpha(distanceScene,angleRad){
+   const mm=(distanceScene/SCENE_PER_METRE)*1000;
+   const deg=THREE.MathUtils.radToDeg(angleRad);
+   if(mm<4 && deg<1.0) return {p:0.10,q:0.08};
+   if(mm<12 && deg<3.0) return {p:0.20,q:0.16};
+   return {p:0.42,q:0.34};
  }
 
  scene.addEventListener('renderstart',()=>{
    const loop=()=>{
      const obs=[];
-     markers.forEach((m,i)=>{if(m.object3D.visible) obs.push(observed(i));});
+     markers.forEach((m,i)=>{
+       if(m.object3D.visible) obs.push(observed(i));
+     });
+
      const chosen=chooseConstellation(obs);
 
-     if(chosen){
+     if(chosen && modelReady){
        targetP.copy(chosen.solved.p);
        targetQ.copy(chosen.solved.q);
 
-       // Keep quaternion interpolation on the same hemisphere.
        if(havePose && smoothQ.dot(targetQ)<0){
          targetQ.set(-targetQ.x,-targetQ.y,-targetQ.z,-targetQ.w);
        }
@@ -280,9 +347,12 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
            smoothQ.copy(targetQ);
            havePose=true;
          }else{
-           // Single smoothing stage, after robust rigid solve.
-           smoothP.lerp(targetP,.34);
-           smoothQ.slerp(targetQ,.30);
+           const d=smoothP.distanceTo(targetP);
+           const dot=Math.min(1,Math.max(-1,Math.abs(smoothQ.dot(targetQ))));
+           const angle=2*Math.acos(dot);
+           const alpha=filteredAlpha(d,angle);
+           smoothP.lerp(targetP,alpha.p);
+           smoothQ.slerp(targetQ,alpha.q);
          }
 
          rig.object3D.position.copy(smoothP);
@@ -291,34 +361,39 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
          rig.object3D.visible=true;
          lastGood=performance.now();
 
-         status.textContent='RIGID MAT LOCK · '+chosen.obs.length+
+         status.textContent='REGISTRATION LOCK · '+chosen.obs.length+
            ' of '+obs.length+' markers';
          diag.textContent=
-           'fixed scale 19.437 scene/m'+
-           '   RMS '+chosen.solved.rmsMm.toFixed(1)+' mm'+
-           '   worst '+(chosen.shape.worst*100).toFixed(1)+'%\n'+
-           'clamp 177 × 76 mm · physical scale locked';
+           'RMS '+chosen.solved.rmsMm.toFixed(1)+' mm'+
+           ' · worst '+(chosen.shape.worst*100).toFixed(1)+'%'+
+           ' · fixed '+SCENE_PER_METRE.toFixed(3)+' scene/m\n'+
+           modelInfo+
+           '\nvirtual footprint 177 × 76 mm';
        }
      }else{
        goodFrames=0;
        const age=performance.now()-lastGood;
 
        if(havePose && age<1200){
-         // Hold last GOOD rigid pose. Never invent a pose from 1-2 markers.
          rig.setAttribute('visible',true);
          rig.object3D.visible=true;
-         status.textContent='MAT HOLD · '+obs.length+' seen · '+Math.round(age)+' ms';
-         diag.textContent='Holding last validated 3/4-marker pose.';
+         status.textContent='REG HOLD · '+obs.length+' seen · '+Math.round(age)+' ms';
+         diag.textContent='Holding last validated rigid-mat pose.\n'+modelInfo;
        }else{
          rig.setAttribute('visible',false);
          rig.object3D.visible=false;
          havePose=false;
-         status.textContent='Need valid 3-marker geometry · '+obs.length+' seen';
-         if(obs.length>=3){
+
+         if(!modelReady){
+           status.textContent='Loading calibration model…';
+           diag.textContent=modelInfo;
+         }else if(obs.length>=3){
            const sh=shapeError(obs);
-           diag.textContent='geometry rejected · worst pair error '+(sh.worst*100).toFixed(1)+'%';
+           status.textContent='Geometry rejected · '+obs.length+' seen';
+           diag.textContent='worst pair error '+(sh.worst*100).toFixed(1)+'%\n'+modelInfo;
          }else{
-           diag.textContent='Bring at least 3 fiducials into view.';
+           status.textContent='Need 3 markers · '+obs.length+' seen';
+           diag.textContent='Bring at least 3 fiducials into view.\n'+modelInfo;
          }
        }
      }
@@ -332,7 +407,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.7 · FIXED-SCALE RIGID MAT LOCK</div><div id="diag"></div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.8 · REGISTRATION CALIBRATION · AUTO-DATUM</div><div id="diag"></div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono;">
@@ -342,9 +417,23 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false"></a-marker>
  <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false"></a-marker>
  <a-entity id="clamp-world" visible="false">
-   <a-entity id="clamp-model" gltf-model="#clamp"
-             position="0 0.002 0" rotation="0 0 0"
-             scale="0.1 0.1 0.1"></a-entity>
+
+   <!-- Virtual survey rectangle. If these four bars sit on the printed
+        rectangle, the MAT pose is correct independently of the GLB. -->
+   <a-box position="0 0.012 -0.738606" width="3.440349" height="0.018" depth="0.024"
+          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+   <a-box position="0 0.012 0.738606" width="3.440349" height="0.018" depth="0.024"
+          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+   <a-box position="-1.7201745 0.012 0" width="0.024" height="0.018" depth="1.477212"
+          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+   <a-box position="1.7201745 0.012 0" width="0.024" height="0.018" depth="1.477212"
+          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+
+   <!-- The pivot receives only local GLB datum/scale corrections.
+        The tracker never modifies it. -->
+   <a-entity id="clamp-pivot">
+     <a-entity id="clamp-model" gltf-model="#clamp"></a-entity>
+   </a-entity>
  </a-entity>
  <a-entity camera></a-entity>
 </a-scene>
