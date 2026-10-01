@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 5.9</title>
+<title>Bench Clamp AR Prototype 6.0</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -39,8 +39,6 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  const diag=document.getElementById('diag');
  const display=document.getElementById('display-video');
  const rig=document.getElementById('clamp-world');
- const pivot=document.getElementById('clamp-pivot');
- const model=document.getElementById('clamp-model');
  const markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
 
  rig.setAttribute('visible',false);
@@ -131,54 +129,12 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  scene.addEventListener('render-target-loaded',transparent);
  setTimeout(transparent,500);
 
- // -------- Auto-datum the GLB itself --------
- // The mesh is centred automatically in X/Z and its lowest Y point is placed
- // exactly on the mat plane. Its longest horizontal dimension is aligned with
- // the 177 mm printed rectangle and scaled from the actual GLB bounding box.
- let modelReady=false;
- let modelInfo='model loading';
-
- model.addEventListener('model-loaded',()=>{
-   const mesh=model.getObject3D('mesh');
-   if(!mesh) return;
-
-   model.object3D.position.set(0,0,0);
-   pivot.object3D.rotation.set(0,0,0);
-   pivot.object3D.scale.set(1,1,1);
-   scene.object3D.updateMatrixWorld(true);
-
-   const box=new THREE.Box3().setFromObject(mesh);
-   const size=new THREE.Vector3();
-   const centre=new THREE.Vector3();
-   box.getSize(size);
-   box.getCenter(centre);
-
-   // Datum the raw GLB: footprint centre at X/Z=0, bottom surface at Y=0.
-   model.object3D.position.set(-centre.x,-box.min.y,-centre.z);
-
-   const xIsLong=size.x>=size.z;
-   const longExtent=xIsLong ? size.x : size.z;
-   const widthExtent=xIsLong ? size.z : size.x;
-
-   // If the GLB's long horizontal axis happens to be Z, rotate it onto mat X.
-   const yaw=xIsLong ? 0 : Math.PI/2;
-   pivot.object3D.rotation.set(0,yaw,0);
-
-   // Physical model scale comes directly from the actual loaded GLB bounds.
-   const physicalScale=TARGET_LENGTH_SCENE/longExtent;
-   pivot.object3D.scale.setScalar(physicalScale);
-
-   const resultingWidthM=(widthExtent*physicalScale)/SCENE_PER_METRE;
-   const resultingHeightM=(size.y*physicalScale)/SCENE_PER_METRE;
-
-   modelInfo=
-     'GLB '+size.x.toFixed(3)+'×'+size.y.toFixed(3)+'×'+size.z.toFixed(3)+
-     ' · model scale '+physicalScale.toFixed(3)+
-     ' · width '+(resultingWidthM*1000).toFixed(1)+' mm'+
-     ' · height '+(resultingHeightM*1000).toFixed(1)+' mm';
-
-   modelReady=true;
- });
+ // -------- Pure coordinate-frame diagnostic --------
+ // No GLB is rendered in 6.0. If the diagnostic geometry overlays the
+ // printed fixture correctly, the mat solver is innocent and the remaining
+ // fault is downstream in the model transform.
+ let modelReady=true;
+ let modelInfo='diagnostic frame: centre cross + 177x76 footprint + surveyed fiducial centres';
 
  // -------- Rigid mat solver, kept in AR.js native scene units --------
  const wp=new THREE.Vector3(),wq=new THREE.Quaternion(),ws=new THREE.Vector3();
@@ -392,15 +348,15 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
          lastGood=performance.now();
 
          lastPairGapMm=chosen.solved.pairGapMm||0;
-         status.textContent='DATUM LOCK · '+chosen.obs.length+
+         status.textContent='FRAME LOCK · '+chosen.obs.length+
            ' of '+obs.length+' markers';
          diag.textContent=
            chosen.mode+
            ' · RMS '+chosen.solved.rmsMm.toFixed(1)+' mm'+
            ' · worst '+(chosen.shape.worst*100).toFixed(1)+'%'+
            (chosen.solved.pairGapMm ? ' · centre gap '+chosen.solved.pairGapMm.toFixed(1)+' mm' : '')+
-           '\n'+modelInfo+
-           '\nvirtual footprint 177 × 76 mm · solver datum = printed rectangle centre';
+           '\nWHITE CROSS = solved centre · GREEN = 177×76 footprint'+
+           '\nCOLOURED RINGS should sit on the four printed fiducial centres';
        }
      }else{
        goodFrames=0;
@@ -439,33 +395,56 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.9 · OPPOSITE-PAIR DATUM SOLVER</div><div id="diag"></div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 6.0 · COORDINATE FRAME VISUALISER</div><div id="diag"></div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono;">
- <a-assets><a-asset-item id="clamp" src="clamp.glb"></a-asset-item></a-assets>
  <a-marker id="m1" type="pattern" url="fid01.patt" size="0.05824" smooth="false"></a-marker>
  <a-marker id="m2" type="pattern" url="fid02.patt" size="0.05830" smooth="false"></a-marker>
  <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false"></a-marker>
  <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false"></a-marker>
  <a-entity id="clamp-world" visible="false">
 
-   <!-- Virtual survey rectangle. If these four bars sit on the printed
-        rectangle, the MAT pose is correct independently of the GLB. -->
-   <a-box position="0 0.012 -0.738606" width="3.440349" height="0.018" depth="0.024"
-          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
-   <a-box position="0 0.012 0.738606" width="3.440349" height="0.018" depth="0.024"
-          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
-   <a-box position="-1.7201745 0.012 0" width="0.024" height="0.018" depth="1.477212"
-          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
-   <a-box position="1.7201745 0.012 0" width="0.024" height="0.018" depth="1.477212"
-          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
+   <!-- WHITE cross = the solver's actual mat origin / printed rectangle centre -->
+   <a-box position="0 0.035 0" width="0.70" height="0.035" depth="0.055"
+          material="color:#ffffff"></a-box>
+   <a-box position="0 0.035 0" width="0.055" height="0.035" depth="0.70"
+          material="color:#ffffff"></a-box>
+   <a-sphere position="0 0.060 0" radius="0.10"
+             material="color:#ff00ff"></a-sphere>
 
-   <!-- The pivot receives only local GLB datum/scale corrections.
-        The tracker never modifies it. -->
-   <a-entity id="clamp-pivot">
-     <a-entity id="clamp-model" gltf-model="#clamp"></a-entity>
-   </a-entity>
+   <!-- GREEN = the exact 177 × 76 mm target footprint -->
+   <a-box position="0 0.018 -0.738606" width="3.440349" height="0.035" depth="0.045"
+          material="color:#00ff88"></a-box>
+   <a-box position="0 0.018 0.738606" width="3.440349" height="0.035" depth="0.045"
+          material="color:#00ff88"></a-box>
+   <a-box position="-1.7201745 0.018 0" width="0.045" height="0.035" depth="1.477212"
+          material="color:#00ff88"></a-box>
+   <a-box position="1.7201745 0.018 0" width="0.045" height="0.035" depth="1.477212"
+          material="color:#00ff88"></a-box>
+
+   <!-- Thin rays from solved centre to surveyed fiducial centres -->
+   <a-entity line="start: 0 0.028 0; end: 0 0.028 -1.8173595; color: #00ffff"></a-entity>
+   <a-entity line="start: 0 0.028 0; end: 2.82983283 0.028 0; color: #ffff00"></a-entity>
+   <a-entity line="start: 0 0.028 0; end: 0 0.028 1.82027505; color: #ff8800"></a-entity>
+   <a-entity line="start: 0 0.028 0; end: -2.852671305 0.028 0; color: #aa66ff"></a-entity>
+
+   <!-- Rings should overlay the physical centres of FID01..04 -->
+   <a-ring position="0 0.040 -1.8173595" rotation="-90 0 0"
+           radius-inner="0.09" radius-outer="0.14" color="#00ffff"></a-ring>
+   <a-ring position="2.82983283 0.040 0" rotation="-90 0 0"
+           radius-inner="0.09" radius-outer="0.14" color="#ffff00"></a-ring>
+   <a-ring position="0 0.040 1.82027505" rotation="-90 0 0"
+           radius-inner="0.09" radius-outer="0.14" color="#ff8800"></a-ring>
+   <a-ring position="-2.852671305 0.040 0" rotation="-90 0 0"
+           radius-inner="0.09" radius-outer="0.14" color="#aa66ff"></a-ring>
+
+   <!-- Axis stubs: RED = +X (right), BLUE = +Z (down sheet) -->
+   <a-box position="0.42 0.055 0" width="0.80" height="0.045" depth="0.045"
+          material="color:#ff3333"></a-box>
+   <a-box position="0 0.055 0.42" width="0.045" height="0.045" depth="0.80"
+          material="color:#3388ff"></a-box>
+
  </a-entity>
  <a-entity camera></a-entity>
 </a-scene>
