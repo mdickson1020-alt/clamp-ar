@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 5.8</title>
+<title>Bench Clamp AR Prototype 5.9</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -184,7 +184,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  const wp=new THREE.Vector3(),wq=new THREE.Quaternion(),ws=new THREE.Vector3();
  const smoothP=new THREE.Vector3(),smoothQ=new THREE.Quaternion();
  const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
- let havePose=false,lastGood=0,goodFrames=0;
+ let havePose=false,lastGood=0,goodFrames=0,lastPairGapMm=0;
 
  function observed(i){
    const o=markers[i].object3D;
@@ -217,53 +217,78 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  function solveMat(obs){
    if(obs.length<3) return null;
 
-   let mx=0,mz=0;
-   const centroid=new THREE.Vector3();
-   obs.forEach(o=>{
-     mx+=local[o.i].x;
-     mz+=local[o.i].y;
-     centroid.add(o.p);
-   });
-   const n=obs.length;
-   mx/=n; mz/=n; centroid.multiplyScalar(1/n);
+   const by={};
+   obs.forEach(o=>by[o.i]=o);
 
-   let sxx=0,szz=0,sxz=0;
-   const sxp=new THREE.Vector3(),szp=new THREE.Vector3();
+   // Physical distances from marker centres to the actual footprint centre.
+   const TOP_M=0.093500, BOTTOM_M=0.093650;
+   const LEFT_M=0.146765, RIGHT_M=0.145590;
 
-   obs.forEach(o=>{
-     const dx=local[o.i].x-mx;
-     const dz=local[o.i].y-mz;
-     const dp=o.p.clone().sub(centroid);
-     sxx+=dx*dx; szz+=dz*dz; sxz+=dx*dz;
-     sxp.addScaledVector(dp,dx);
-     szp.addScaledVector(dp,dz);
-   });
+   const topBottomFrac=(TOP_M/(TOP_M+BOTTOM_M));
+   const leftRightFrac=(LEFT_M/(LEFT_M+RIGHT_M));
 
-   const det=sxx*szz-sxz*sxz;
-   if(Math.abs(det)<1e-10) return null;
+   let centreTB=null, centreLR=null;
 
-   const ax=sxp.clone().multiplyScalar(szz)
-     .addScaledVector(szp,-sxz).multiplyScalar(1/det);
-   const az=szp.clone().multiplyScalar(sxx)
-     .addScaledVector(sxp,-sxz).multiplyScalar(1/det);
+   // The centre is solved from OPPOSITE marker pairs. This is deliberately
+   // independent of model origin, marker quaternion, and the LS scale fit.
+   if(by[0] && by[2]){
+     centreTB=by[0].p.clone().lerp(by[2].p,topBottomFrac);
+   }
+   if(by[3] && by[1]){
+     centreLR=by[3].p.clone().lerp(by[1].p,leftRightFrac);
+   }
 
-   if(ax.length()<0.25 || az.length()<0.25) return null;
+   if(!centreTB && !centreLR) return null; // impossible for a genuine 3-of-4 cross
 
-   const xAxis=ax.clone().normalize();
-   const zAxis=az.clone().addScaledVector(xAxis,-az.dot(xAxis)).normalize();
+   const centre=(centreTB && centreLR)
+     ? centreTB.clone().add(centreLR).multiplyScalar(0.5)
+     : (centreTB ? centreTB.clone() : centreLR.clone());
+
+   let pairGapMm=0;
+   if(centreTB && centreLR){
+     pairGapMm=(centreTB.distanceTo(centreLR)/SCENE_PER_METRE)*1000;
+   }
+
+   // Mat X axis: LEFT -> RIGHT. Any 3-of-4 set always gives either the
+   // complete pair or one side marker plus the solved centre.
+   let xRaw=null;
+   if(by[3] && by[1]) xRaw=by[1].p.clone().sub(by[3].p);
+   else if(by[1]) xRaw=by[1].p.clone().sub(centre);
+   else if(by[3]) xRaw=centre.clone().sub(by[3].p);
+
+   // Mat Z axis: TOP -> BOTTOM.
+   let zRaw=null;
+   if(by[0] && by[2]) zRaw=by[2].p.clone().sub(by[0].p);
+   else if(by[2]) zRaw=by[2].p.clone().sub(centre);
+   else if(by[0]) zRaw=centre.clone().sub(by[0].p);
+
+   if(!xRaw || !zRaw || xRaw.length()<0.2 || zRaw.length()<0.2) return null;
+
+   const xAxis=xRaw.normalize();
+
+   // Orthogonalise Z to X so the virtual mat remains a rigid rectangle even
+   // when individual marker depth estimates disagree slightly.
+   const zAxis=zRaw.addScaledVector(xAxis,-zRaw.dot(xAxis)).normalize();
    if(zAxis.length()<0.9) return null;
 
-   const yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis).normalize();
-   const zFixed=new THREE.Vector3().crossVectors(xAxis,yAxis).normalize();
-   const xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
+   let yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis).normalize();
+   let zFixed=new THREE.Vector3().crossVectors(xAxis,yAxis).normalize();
+   let xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
+
+   // Positive model Y must point above the sheet, toward the camera.
+   const cameraPos=new THREE.Vector3();
+   scene.camera.getWorldPosition(cameraPos);
+   const toCamera=cameraPos.sub(centre);
+   if(yAxis.dot(toCamera)<0){
+     yAxis.negate();
+     zFixed.negate();
+     xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
+   }
 
    const basis=new THREE.Matrix4().makeBasis(xFixed,yAxis,zFixed);
    const q=new THREE.Quaternion().setFromRotationMatrix(basis);
 
-   const centre=centroid.clone()
-     .addScaledVector(xFixed,-mx)
-     .addScaledVector(zFixed,-mz);
-
+   // Residual against the surveyed fixture geometry.
    let ss=0;
    obs.forEach(o=>{
      const pred=centre.clone()
@@ -272,10 +297,10 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
      ss+=pred.distanceToSquared(o.p);
    });
 
-   const rmsScene=Math.sqrt(ss/n);
+   const rmsScene=Math.sqrt(ss/obs.length);
    const rmsMm=(rmsScene/SCENE_PER_METRE)*1000;
 
-   return {p:centre,q:q,rmsMm:rmsMm};
+   return {p:centre,q:q,rmsMm:rmsMm,pairGapMm:pairGapMm};
  }
 
  function subsets3(arr){
@@ -291,25 +316,30 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  function chooseConstellation(obs){
    if(obs.length<3) return null;
 
+   // First choice: all four markers. The two independently solved physical
+   // centres should agree. If they do, this is our strongest datum.
    if(obs.length>=4){
      const e4=shapeError(obs);
-     const s4=e4.worst<0.18 ? solveMat(obs) : null;
-     if(s4 && s4.rmsMm<28){
-       return {obs:obs,solved:s4,shape:e4};
+     const s4=solveMat(obs);
+     if(s4 && e4.worst<0.20 && s4.rmsMm<32 && s4.pairGapMm<32){
+       return {obs:obs,solved:s4,shape:e4,mode:'4-marker cross'};
      }
    }
 
+   // If one marker is rogue or missing, every 3-of-4 subset still contains one
+   // opposite pair. Pick the physically best-fitting trio.
    let best=null;
    subsets3(obs).forEach(sub=>{
      const sh=shapeError(sub);
-     if(sh.worst>0.20) return;
+     if(sh.worst>0.22) return;
      const sol=solveMat(sub);
-     if(!sol || sol.rmsMm>30) return;
-     const score=sol.rmsMm + sh.mean*55;
+     if(!sol || sol.rmsMm>34) return;
+     const score=sol.rmsMm + sh.mean*45;
      if(!best || score<best.score){
-       best={obs:sub,solved:sol,shape:sh,score:score};
+       best={obs:sub,solved:sol,shape:sh,score:score,mode:'3-marker pair'};
      }
    });
+
    return best;
  }
 
@@ -361,14 +391,16 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
          rig.object3D.visible=true;
          lastGood=performance.now();
 
-         status.textContent='REGISTRATION LOCK · '+chosen.obs.length+
+         lastPairGapMm=chosen.solved.pairGapMm||0;
+         status.textContent='DATUM LOCK · '+chosen.obs.length+
            ' of '+obs.length+' markers';
          diag.textContent=
-           'RMS '+chosen.solved.rmsMm.toFixed(1)+' mm'+
+           chosen.mode+
+           ' · RMS '+chosen.solved.rmsMm.toFixed(1)+' mm'+
            ' · worst '+(chosen.shape.worst*100).toFixed(1)+'%'+
-           ' · fixed '+SCENE_PER_METRE.toFixed(3)+' scene/m\n'+
-           modelInfo+
-           '\nvirtual footprint 177 × 76 mm';
+           (chosen.solved.pairGapMm ? ' · centre gap '+chosen.solved.pairGapMm.toFixed(1)+' mm' : '')+
+           '\n'+modelInfo+
+           '\nvirtual footprint 177 × 76 mm · solver datum = printed rectangle centre';
        }
      }else{
        goodFrames=0;
@@ -407,7 +439,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.8 · REGISTRATION CALIBRATION · AUTO-DATUM</div><div id="diag"></div></div>
+<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 5.9 · OPPOSITE-PAIR DATUM SOLVER</div><div id="diag"></div></div>
 <a-scene tracker-hud embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono;">
@@ -421,13 +453,13 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
    <!-- Virtual survey rectangle. If these four bars sit on the printed
         rectangle, the MAT pose is correct independently of the GLB. -->
    <a-box position="0 0.012 -0.738606" width="3.440349" height="0.018" depth="0.024"
-          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
    <a-box position="0 0.012 0.738606" width="3.440349" height="0.018" depth="0.024"
-          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
    <a-box position="-1.7201745 0.012 0" width="0.024" height="0.018" depth="1.477212"
-          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
    <a-box position="1.7201745 0.012 0" width="0.024" height="0.018" depth="1.477212"
-          material="color:#00ff88; opacity:0.8; transparent:true"></a-box>
+          material="color:#00ff88; opacity:1.0; transparent:false"></a-box>
 
    <!-- The pivot receives only local GLB datum/scale corrections.
         The tracker never modifies it. -->
