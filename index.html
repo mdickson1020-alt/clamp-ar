@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 6.2</title>
+<title>Bench Clamp AR Prototype 6.3</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -158,7 +158,7 @@ AFRAME.registerComponent('single-anchor-controller',{init:function(){
        diag.textContent=
          'driver: '+names[active]+' · backups visible: '+backups+' · handovers: '+handovers+
          '\nNO pose fusion · calibrated scene scale 19.437×'+
-         '\nscene scale: 19.437 units/m · surveyed offsets scaled identically'+
+         '\nscene scale: 19.437 units/m · marker→datum signs corrected'+
          '\nWHITE/MAGENTA = centre · GREEN = 177×76 mm footprint'+
          '\nCYAN/YELLOW/ORANGE/PURPLE rings = FID01/02/03/04 centres';
      }else if(visible.length){
@@ -167,7 +167,7 @@ AFRAME.registerComponent('single-anchor-controller',{init:function(){
          '\nWaiting for 2 consecutive tracked frames.';
      }else{
        status.textContent='Find any fiducial · 0 seen';
-       diag.textContent='Only ONE marker is required in Prototype 6.2.'+
+       diag.textContent='Only ONE marker is required in Prototype 6.3.'+
          '\nThe other three are redundancy for handover.';
      }
 
@@ -182,7 +182,7 @@ AFRAME.registerComponent('single-anchor-controller',{init:function(){
 <video id="display-video" autoplay muted playsinline></video>
 <div id="hud">
  <div id="status">Starting camera…</div>
- <div class="small">Prototype 6.2 · SINGLE-MARKER DATUM · CALIBRATED SCENE SCALE</div>
+ <div class="small">Prototype 6.3 · SINGLE-MARKER DATUM · CORRECTED OFFSET SIGNS</div>
  <div id="diag"></div>
 </div>
 
@@ -193,7 +193,7 @@ AFRAME.registerComponent('single-anchor-controller',{init:function(){
  <a-marker id="m1" type="pattern" url="fid01.patt" size="0.05824" smooth="false">
    <!-- Marker-local translation from this fiducial centre to the common mat datum -->
    <a-entity id="d1" class="datum-anchor" visible="false"
-             position="0.000000000 0 1.817359500">
+             position="0.000000000 0 -1.817359500">
     <a-entity scale="19.437 19.437 19.437">
 
       <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
@@ -246,7 +246,7 @@ AFRAME.registerComponent('single-anchor-controller',{init:function(){
  <a-marker id="m2" type="pattern" url="fid02.patt" size="0.05830" smooth="false">
    <!-- Marker-local translation from this fiducial centre to the common mat datum -->
    <a-entity id="d2" class="datum-anchor" visible="false"
-             position="-2.829832830 0 0.000000000">
+             position="2.829832830 0 0.000000000">
     <a-entity scale="19.437 19.437 19.437">
 
       <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
@@ -299,7 +299,7 @@ AFRAME.registerComponent('single-anchor-controller',{init:function(){
  <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false">
    <!-- Marker-local translation from this fiducial centre to the common mat datum -->
    <a-entity id="d3" class="datum-anchor" visible="false"
-             position="0.000000000 0 -1.820275050">
+             position="0.000000000 0 1.820275050">
     <a-entity scale="19.437 19.437 19.437">
 
       <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
@@ -352,7 +352,7 @@ AFRAME.registerComponent('single-anchor-controller',{init:function(){
  <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false">
    <!-- Marker-local translation from this fiducial centre to the common mat datum -->
    <a-entity id="d4" class="datum-anchor" visible="false"
-             position="2.852671305 0 0.000000000">
+             position="-2.852671305 0 0.000000000">
     <a-entity scale="19.437 19.437 19.437">
 
       <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
