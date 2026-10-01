@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 6.0</title>
+<title>Bench Clamp AR Prototype 6.1</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 <style>
@@ -14,15 +14,11 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-f
  position:fixed!important;inset:0!important;
  width:100vw!important;height:100vh!important;
  object-fit:cover!important;
- z-index:0!important;
- background:#000;
+ z-index:0!important;background:#000;
 }
 #arjs-video{
- position:fixed!important;
- width:1px!important;height:1px!important;
- left:-10px!important;top:-10px!important;
- opacity:0!important;
- pointer-events:none!important;
+ position:fixed!important;width:1px!important;height:1px!important;
+ left:-10px!important;top:-10px!important;opacity:0!important;pointer-events:none!important;
 }
 a-scene,.a-canvas{
  position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;
@@ -33,39 +29,24 @@ a-scene{z-index:1!important;background:transparent!important}
 .a-enter-vr,.a-enter-ar{display:none!important}
 </style>
 <script>
-AFRAME.registerComponent('tracker-hud',{init:function(){
+AFRAME.registerComponent('single-anchor-controller',{init:function(){
  const scene=this.el;
  const status=document.getElementById('status');
  const diag=document.getElementById('diag');
  const display=document.getElementById('display-video');
- const rig=document.getElementById('clamp-world');
+
  const markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
+ const datums=['d1','d2','d3','d4'].map(id=>document.getElementById(id));
+ const names=['FID01 TOP','FID02 RIGHT','FID03 BOTTOM','FID04 LEFT'];
 
- rig.setAttribute('visible',false);
- rig.object3D.visible=false;
+ let active=-1;
+ let lastActive=-1;
+ let streak=[0,0,0,0];
+ let handovers=0;
 
- // Proven by the 5.5 constellation diagnostic.
- const SCENE_PER_METRE=19.437;
+ datums.forEach(d=>{d.setAttribute('visible',false); d.object3D.visible=false;});
 
- // Real surveyed marker-centre positions relative to the centre of the
- // 177 x 76 mm printed footprint. X=right, Z=down the sheet.
- const localM=[
-   new THREE.Vector2( 0.000000,-0.093500), // FID01 TOP
-   new THREE.Vector2( 0.145590, 0.000000), // FID02 RIGHT
-   new THREE.Vector2( 0.000000, 0.093650), // FID03 BOTTOM
-   new THREE.Vector2(-0.146765, 0.000000)  // FID04 LEFT
- ];
- const local=localM.map(v=>new THREE.Vector2(
-   v.x*SCENE_PER_METRE,
-   v.y*SCENE_PER_METRE
- ));
-
- const TARGET_LENGTH_M=0.177;
- const TARGET_WIDTH_M=0.076;
- const TARGET_LENGTH_SCENE=TARGET_LENGTH_M*SCENE_PER_METRE;
- const TARGET_WIDTH_SCENE=TARGET_WIDTH_M*SCENE_PER_METRE;
-
- // -------- Camera/display plumbing: preserved from the known-good branch --------
+ // -------- Camera/display plumbing: preserved from known-good 2.1 branch --------
  const attachDisplay=()=>{
    const source=document.getElementById('arjs-video');
    if(source && source.srcObject && display.srcObject!==source.srcObject){
@@ -101,8 +82,7 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
      right:'auto',bottom:'auto',objectFit:'fill'
    });
    Object.assign(canvas.style,{
-     position:'fixed',width:w+'px',height:h+'px',
-     left:left+'px',top:top+'px',
+     position:'fixed',width:w+'px',height:h+'px',left:left+'px',top:top+'px',
      maxWidth:'none',maxHeight:'none',background:'transparent'
    });
 
@@ -129,261 +109,65 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
  scene.addEventListener('render-target-loaded',transparent);
  setTimeout(transparent,500);
 
- // -------- Pure coordinate-frame diagnostic --------
- // No GLB is rendered in 6.0. If the diagnostic geometry overlays the
- // printed fixture correctly, the mat solver is innocent and the remaining
- // fault is downstream in the model transform.
- let modelReady=true;
- let modelInfo='diagnostic frame: centre cross + 177x76 footprint + surveyed fiducial centres';
-
- // -------- Rigid mat solver, kept in AR.js native scene units --------
- const wp=new THREE.Vector3(),wq=new THREE.Quaternion(),ws=new THREE.Vector3();
- const smoothP=new THREE.Vector3(),smoothQ=new THREE.Quaternion();
- const targetP=new THREE.Vector3(),targetQ=new THREE.Quaternion();
- let havePose=false,lastGood=0,goodFrames=0,lastPairGapMm=0;
-
- function observed(i){
-   const o=markers[i].object3D;
-   o.updateMatrixWorld(true);
-   o.matrixWorld.decompose(wp,wq,ws);
-   return {i:i,p:wp.clone()};
- }
-
- function expectedDistance(i,j){
-   const dx=local[i].x-local[j].x;
-   const dz=local[i].y-local[j].y;
-   return Math.hypot(dx,dz);
- }
-
- function shapeError(obs){
-   if(obs.length<2) return {worst:999,mean:999};
-   let worst=0,sum=0,n=0;
-   for(let a=0;a<obs.length;a++){
-     for(let b=a+1;b<obs.length;b++){
-       const e=expectedDistance(obs[a].i,obs[b].i);
-       const m=obs[a].p.distanceTo(obs[b].p);
-       const frac=Math.abs(m-e)/e;
-       worst=Math.max(worst,frac);
-       sum+=frac; n++;
-     }
-   }
-   return {worst:worst,mean:sum/Math.max(1,n)};
- }
-
- function solveMat(obs){
-   if(obs.length<3) return null;
-
-   const by={};
-   obs.forEach(o=>by[o.i]=o);
-
-   // Physical distances from marker centres to the actual footprint centre.
-   const TOP_M=0.093500, BOTTOM_M=0.093650;
-   const LEFT_M=0.146765, RIGHT_M=0.145590;
-
-   const topBottomFrac=(TOP_M/(TOP_M+BOTTOM_M));
-   const leftRightFrac=(LEFT_M/(LEFT_M+RIGHT_M));
-
-   let centreTB=null, centreLR=null;
-
-   // The centre is solved from OPPOSITE marker pairs. This is deliberately
-   // independent of model origin, marker quaternion, and the LS scale fit.
-   if(by[0] && by[2]){
-     centreTB=by[0].p.clone().lerp(by[2].p,topBottomFrac);
-   }
-   if(by[3] && by[1]){
-     centreLR=by[3].p.clone().lerp(by[1].p,leftRightFrac);
-   }
-
-   if(!centreTB && !centreLR) return null; // impossible for a genuine 3-of-4 cross
-
-   const centre=(centreTB && centreLR)
-     ? centreTB.clone().add(centreLR).multiplyScalar(0.5)
-     : (centreTB ? centreTB.clone() : centreLR.clone());
-
-   let pairGapMm=0;
-   if(centreTB && centreLR){
-     pairGapMm=(centreTB.distanceTo(centreLR)/SCENE_PER_METRE)*1000;
-   }
-
-   // Mat X axis: LEFT -> RIGHT. Any 3-of-4 set always gives either the
-   // complete pair or one side marker plus the solved centre.
-   let xRaw=null;
-   if(by[3] && by[1]) xRaw=by[1].p.clone().sub(by[3].p);
-   else if(by[1]) xRaw=by[1].p.clone().sub(centre);
-   else if(by[3]) xRaw=centre.clone().sub(by[3].p);
-
-   // Mat Z axis: TOP -> BOTTOM.
-   let zRaw=null;
-   if(by[0] && by[2]) zRaw=by[2].p.clone().sub(by[0].p);
-   else if(by[2]) zRaw=by[2].p.clone().sub(centre);
-   else if(by[0]) zRaw=centre.clone().sub(by[0].p);
-
-   if(!xRaw || !zRaw || xRaw.length()<0.2 || zRaw.length()<0.2) return null;
-
-   const xAxis=xRaw.normalize();
-
-   // Orthogonalise Z to X so the virtual mat remains a rigid rectangle even
-   // when individual marker depth estimates disagree slightly.
-   const zAxis=zRaw.addScaledVector(xAxis,-zRaw.dot(xAxis)).normalize();
-   if(zAxis.length()<0.9) return null;
-
-   let yAxis=new THREE.Vector3().crossVectors(zAxis,xAxis).normalize();
-   let zFixed=new THREE.Vector3().crossVectors(xAxis,yAxis).normalize();
-   let xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
-
-   // Positive model Y must point above the sheet, toward the camera.
-   const cameraPos=new THREE.Vector3();
-   scene.camera.getWorldPosition(cameraPos);
-   const toCamera=cameraPos.sub(centre);
-   if(yAxis.dot(toCamera)<0){
-     yAxis.negate();
-     zFixed.negate();
-     xFixed=new THREE.Vector3().crossVectors(yAxis,zFixed).normalize();
-   }
-
-   const basis=new THREE.Matrix4().makeBasis(xFixed,yAxis,zFixed);
-   const q=new THREE.Quaternion().setFromRotationMatrix(basis);
-
-   // Residual against the surveyed fixture geometry.
-   let ss=0;
-   obs.forEach(o=>{
-     const pred=centre.clone()
-       .addScaledVector(xFixed,local[o.i].x)
-       .addScaledVector(zFixed,local[o.i].y);
-     ss+=pred.distanceToSquared(o.p);
+ function setActive(next){
+   if(next===active) return;
+   lastActive=active;
+   active=next;
+   datums.forEach((d,i)=>{
+     const on=(i===active);
+     d.setAttribute('visible',on);
+     d.object3D.visible=on;
    });
-
-   const rmsScene=Math.sqrt(ss/obs.length);
-   const rmsMm=(rmsScene/SCENE_PER_METRE)*1000;
-
-   return {p:centre,q:q,rmsMm:rmsMm,pairGapMm:pairGapMm};
- }
-
- function subsets3(arr){
-   if(arr.length===3) return [arr];
-   const out=[];
-   for(let a=0;a<arr.length-2;a++)
-    for(let b=a+1;b<arr.length-1;b++)
-     for(let c=b+1;c<arr.length;c++)
-      out.push([arr[a],arr[b],arr[c]]);
-   return out;
- }
-
- function chooseConstellation(obs){
-   if(obs.length<3) return null;
-
-   // First choice: all four markers. The two independently solved physical
-   // centres should agree. If they do, this is our strongest datum.
-   if(obs.length>=4){
-     const e4=shapeError(obs);
-     const s4=solveMat(obs);
-     if(s4 && e4.worst<0.20 && s4.rmsMm<32 && s4.pairGapMm<32){
-       return {obs:obs,solved:s4,shape:e4,mode:'4-marker cross'};
-     }
-   }
-
-   // If one marker is rogue or missing, every 3-of-4 subset still contains one
-   // opposite pair. Pick the physically best-fitting trio.
-   let best=null;
-   subsets3(obs).forEach(sub=>{
-     const sh=shapeError(sub);
-     if(sh.worst>0.22) return;
-     const sol=solveMat(sub);
-     if(!sol || sol.rmsMm>34) return;
-     const score=sol.rmsMm + sh.mean*45;
-     if(!best || score<best.score){
-       best={obs:sub,solved:sol,shape:sh,score:score,mode:'3-marker pair'};
-     }
-   });
-
-   return best;
- }
-
- // Adaptive temporal filter: resist tiny tracking noise, but follow intentional
- // camera movement quickly. Only the FINAL rigid pose is filtered.
- function filteredAlpha(distanceScene,angleRad){
-   const mm=(distanceScene/SCENE_PER_METRE)*1000;
-   const deg=THREE.MathUtils.radToDeg(angleRad);
-   if(mm<4 && deg<1.0) return {p:0.10,q:0.08};
-   if(mm<12 && deg<3.0) return {p:0.20,q:0.16};
-   return {p:0.42,q:0.34};
+   if(lastActive>=0 && active>=0 && lastActive!==active) handovers++;
  }
 
  scene.addEventListener('renderstart',()=>{
    const loop=()=>{
-     const obs=[];
+     const visible=[];
      markers.forEach((m,i)=>{
-       if(m.object3D.visible) obs.push(observed(i));
+       const on=!!m.object3D.visible;
+       streak[i]=on ? Math.min(streak[i]+1,60) : 0;
+       if(on) visible.push(i);
      });
 
-     const chosen=chooseConstellation(obs);
+     // Keep the current marker for as long as it remains tracked. This prevents
+     // needless frame-to-frame swapping when several markers are simultaneously visible.
+     if(active<0 || !markers[active].object3D.visible){
+       let candidate=-1;
+       let best=-1;
+       visible.forEach(i=>{
+         if(streak[i]>best){ best=streak[i]; candidate=i; }
+       });
+       if(candidate>=0 && streak[candidate]>=2) setActive(candidate);
+       else if(visible.length===0) setActive(-1);
+     }
 
-     if(chosen && modelReady){
-       targetP.copy(chosen.solved.p);
-       targetQ.copy(chosen.solved.q);
-
-       if(havePose && smoothQ.dot(targetQ)<0){
-         targetQ.set(-targetQ.x,-targetQ.y,-targetQ.z,-targetQ.w);
+     // If AR.js has hidden the active marker, its child is hidden automatically.
+     // Explicitly keep every non-active datum off so there can never be multiple copies.
+     datums.forEach((d,i)=>{
+       const on=(i===active);
+       if(d.object3D.visible!==on){
+         d.setAttribute('visible',on);
+         d.object3D.visible=on;
        }
+     });
 
-       goodFrames++;
-       if(goodFrames>=3){
-         if(!havePose){
-           smoothP.copy(targetP);
-           smoothQ.copy(targetQ);
-           havePose=true;
-         }else{
-           const d=smoothP.distanceTo(targetP);
-           const dot=Math.min(1,Math.max(-1,Math.abs(smoothQ.dot(targetQ))));
-           const angle=2*Math.acos(dot);
-           const alpha=filteredAlpha(d,angle);
-           smoothP.lerp(targetP,alpha.p);
-           smoothQ.slerp(targetQ,alpha.q);
-         }
-
-         rig.object3D.position.copy(smoothP);
-         rig.object3D.quaternion.copy(smoothQ);
-         rig.setAttribute('visible',true);
-         rig.object3D.visible=true;
-         lastGood=performance.now();
-
-         lastPairGapMm=chosen.solved.pairGapMm||0;
-         status.textContent='FRAME LOCK · '+chosen.obs.length+
-           ' of '+obs.length+' markers';
-         diag.textContent=
-           chosen.mode+
-           ' · RMS '+chosen.solved.rmsMm.toFixed(1)+' mm'+
-           ' · worst '+(chosen.shape.worst*100).toFixed(1)+'%'+
-           (chosen.solved.pairGapMm ? ' · centre gap '+chosen.solved.pairGapMm.toFixed(1)+' mm' : '')+
-           '\nWHITE CROSS = solved centre · GREEN = 177×76 footprint'+
-           '\nCOLOURED RINGS should sit on the four printed fiducial centres';
-       }
+     if(active>=0 && markers[active].object3D.visible){
+       const backups=visible.filter(i=>i!==active).length;
+       status.textContent='SINGLE-ANCHOR LOCK · '+names[active];
+       diag.textContent=
+         'driver: '+names[active]+' · backups visible: '+backups+' · handovers: '+handovers+
+         '\nNO pose fusion · NO world-space scale conversion'+
+         '\nWHITE/MAGENTA = centre · GREEN = 177×76 mm footprint'+
+         '\nCYAN/YELLOW/ORANGE/PURPLE rings = FID01/02/03/04 centres';
+     }else if(visible.length){
+       status.textContent='Acquiring single anchor…';
+       diag.textContent='Visible markers: '+visible.map(i=>names[i]).join(', ')+
+         '\nWaiting for 2 consecutive tracked frames.';
      }else{
-       goodFrames=0;
-       const age=performance.now()-lastGood;
-
-       if(havePose && age<1200){
-         rig.setAttribute('visible',true);
-         rig.object3D.visible=true;
-         status.textContent='REG HOLD · '+obs.length+' seen · '+Math.round(age)+' ms';
-         diag.textContent='Holding last validated rigid-mat pose.\n'+modelInfo;
-       }else{
-         rig.setAttribute('visible',false);
-         rig.object3D.visible=false;
-         havePose=false;
-
-         if(!modelReady){
-           status.textContent='Loading calibration model…';
-           diag.textContent=modelInfo;
-         }else if(obs.length>=3){
-           const sh=shapeError(obs);
-           status.textContent='Geometry rejected · '+obs.length+' seen';
-           diag.textContent='worst pair error '+(sh.worst*100).toFixed(1)+'%\n'+modelInfo;
-         }else{
-           status.textContent='Need 3 markers · '+obs.length+' seen';
-           diag.textContent='Bring at least 3 fiducials into view.\n'+modelInfo;
-         }
-       }
+       status.textContent='Find any fiducial · 0 seen';
+       diag.textContent='Only ONE marker is required in Prototype 6.1.'+
+         '\nThe other three are redundancy for handover.';
      }
 
      requestAnimationFrame(loop);
@@ -395,57 +179,220 @@ AFRAME.registerComponent('tracker-hud',{init:function(){
 </head>
 <body>
 <video id="display-video" autoplay muted playsinline></video>
-<div id="hud"><div id="status">Starting camera…</div><div class="small">Prototype 6.0 · COORDINATE FRAME VISUALISER</div><div id="diag"></div></div>
-<a-scene tracker-hud embedded vr-mode-ui="enabled:false"
+<div id="hud">
+ <div id="status">Starting camera…</div>
+ <div class="small">Prototype 6.1 · SINGLE-MARKER DATUM + REDUNDANT HANDOVER</div>
+ <div id="diag"></div>
+</div>
+
+<a-scene single-anchor-controller embedded vr-mode-ui="enabled:false"
  renderer="antialias:true; alpha:true; precision:mediump"
  arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono;">
- <a-marker id="m1" type="pattern" url="fid01.patt" size="0.05824" smooth="false"></a-marker>
- <a-marker id="m2" type="pattern" url="fid02.patt" size="0.05830" smooth="false"></a-marker>
- <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false"></a-marker>
- <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false"></a-marker>
- <a-entity id="clamp-world" visible="false">
 
-   <!-- WHITE cross = the solver's actual mat origin / printed rectangle centre -->
-   <a-box position="0 0.035 0" width="0.70" height="0.035" depth="0.055"
-          material="color:#ffffff"></a-box>
-   <a-box position="0 0.035 0" width="0.055" height="0.035" depth="0.70"
-          material="color:#ffffff"></a-box>
-   <a-sphere position="0 0.060 0" radius="0.10"
-             material="color:#ff00ff"></a-sphere>
+ <a-marker id="m1" type="pattern" url="fid01.patt" size="0.05824" smooth="false">
+   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
+   <a-entity id="d1" class="datum-anchor" visible="false"
+             position="0.000000 0 0.093500">
 
-   <!-- GREEN = the exact 177 × 76 mm target footprint -->
-   <a-box position="0 0.018 -0.738606" width="3.440349" height="0.035" depth="0.045"
-          material="color:#00ff88"></a-box>
-   <a-box position="0 0.018 0.738606" width="3.440349" height="0.035" depth="0.045"
-          material="color:#00ff88"></a-box>
-   <a-box position="-1.7201745 0.018 0" width="0.045" height="0.035" depth="1.477212"
-          material="color:#00ff88"></a-box>
-   <a-box position="1.7201745 0.018 0" width="0.045" height="0.035" depth="1.477212"
-          material="color:#00ff88"></a-box>
+      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
+      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-sphere position="0 0.005 0" radius="0.004"
+                material="color:#ff00ff; shader:flat"></a-sphere>
 
-   <!-- Thin rays from solved centre to surveyed fiducial centres -->
-   <a-entity line="start: 0 0.028 0; end: 0 0.028 -1.8173595; color: #00ffff"></a-entity>
-   <a-entity line="start: 0 0.028 0; end: 2.82983283 0.028 0; color: #ffff00"></a-entity>
-   <a-entity line="start: 0 0.028 0; end: 0 0.028 1.82027505; color: #ff8800"></a-entity>
-   <a-entity line="start: 0 0.028 0; end: -2.852671305 0.028 0; color: #aa66ff"></a-entity>
+      <!-- GREEN = exact 177 x 76 mm target footprint -->
+      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
 
-   <!-- Rings should overlay the physical centres of FID01..04 -->
-   <a-ring position="0 0.040 -1.8173595" rotation="-90 0 0"
-           radius-inner="0.09" radius-outer="0.14" color="#00ffff"></a-ring>
-   <a-ring position="2.82983283 0.040 0" rotation="-90 0 0"
-           radius-inner="0.09" radius-outer="0.14" color="#ffff00"></a-ring>
-   <a-ring position="0 0.040 1.82027505" rotation="-90 0 0"
-           radius-inner="0.09" radius-outer="0.14" color="#ff8800"></a-ring>
-   <a-ring position="-2.852671305 0.040 0" rotation="-90 0 0"
-           radius-inner="0.09" radius-outer="0.14" color="#aa66ff"></a-ring>
+      <!-- Rays from target datum to all four surveyed fiducial centres -->
+      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
+      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
 
-   <!-- Axis stubs: RED = +X (right), BLUE = +Z (down sheet) -->
-   <a-box position="0.42 0.055 0" width="0.80" height="0.045" depth="0.045"
-          material="color:#ff3333"></a-box>
-   <a-box position="0 0.055 0.42" width="0.045" height="0.045" depth="0.80"
-          material="color:#3388ff"></a-box>
+      <!-- Rings should overlay the physical centres of FID01..04 -->
+      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#00ffff; shader:flat; side:double"></a-ring>
+      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ffff00; shader:flat; side:double"></a-ring>
+      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ff8800; shader:flat; side:double"></a-ring>
+      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#aa66ff; shader:flat; side:double"></a-ring>
 
- </a-entity>
+      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
+      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
+             material="color:#ff3333; shader:flat"></a-box>
+      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
+             material="color:#3388ff; shader:flat"></a-box>
+
+   </a-entity>
+ </a-marker>
+ <a-marker id="m2" type="pattern" url="fid02.patt" size="0.05830" smooth="false">
+   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
+   <a-entity id="d2" class="datum-anchor" visible="false"
+             position="-0.145590 0 0.000000">
+
+      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
+      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-sphere position="0 0.005 0" radius="0.004"
+                material="color:#ff00ff; shader:flat"></a-sphere>
+
+      <!-- GREEN = exact 177 x 76 mm target footprint -->
+      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
+
+      <!-- Rays from target datum to all four surveyed fiducial centres -->
+      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
+      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
+
+      <!-- Rings should overlay the physical centres of FID01..04 -->
+      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#00ffff; shader:flat; side:double"></a-ring>
+      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ffff00; shader:flat; side:double"></a-ring>
+      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ff8800; shader:flat; side:double"></a-ring>
+      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#aa66ff; shader:flat; side:double"></a-ring>
+
+      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
+      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
+             material="color:#ff3333; shader:flat"></a-box>
+      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
+             material="color:#3388ff; shader:flat"></a-box>
+
+   </a-entity>
+ </a-marker>
+ <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false">
+   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
+   <a-entity id="d3" class="datum-anchor" visible="false"
+             position="0.000000 0 -0.093650">
+
+      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
+      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-sphere position="0 0.005 0" radius="0.004"
+                material="color:#ff00ff; shader:flat"></a-sphere>
+
+      <!-- GREEN = exact 177 x 76 mm target footprint -->
+      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
+
+      <!-- Rays from target datum to all four surveyed fiducial centres -->
+      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
+      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
+
+      <!-- Rings should overlay the physical centres of FID01..04 -->
+      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#00ffff; shader:flat; side:double"></a-ring>
+      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ffff00; shader:flat; side:double"></a-ring>
+      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ff8800; shader:flat; side:double"></a-ring>
+      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#aa66ff; shader:flat; side:double"></a-ring>
+
+      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
+      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
+             material="color:#ff3333; shader:flat"></a-box>
+      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
+             material="color:#3388ff; shader:flat"></a-box>
+
+   </a-entity>
+ </a-marker>
+ <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false">
+   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
+   <a-entity id="d4" class="datum-anchor" visible="false"
+             position="0.146765 0 0.000000">
+
+      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
+      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
+             material="color:#ffffff; shader:flat"></a-box>
+      <a-sphere position="0 0.005 0" radius="0.004"
+                material="color:#ff00ff; shader:flat"></a-sphere>
+
+      <!-- GREEN = exact 177 x 76 mm target footprint -->
+      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
+      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
+             material="color:#00ff88; shader:flat"></a-box>
+
+      <!-- Rays from target datum to all four surveyed fiducial centres -->
+      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
+      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
+      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
+
+      <!-- Rings should overlay the physical centres of FID01..04 -->
+      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#00ffff; shader:flat; side:double"></a-ring>
+      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ffff00; shader:flat; side:double"></a-ring>
+      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#ff8800; shader:flat; side:double"></a-ring>
+      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
+              radius-inner="0.0045" radius-outer="0.0075"
+              material="color:#aa66ff; shader:flat; side:double"></a-ring>
+
+      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
+      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
+             material="color:#ff3333; shader:flat"></a-box>
+      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
+             material="color:#3388ff; shader:flat"></a-box>
+
+   </a-entity>
+ </a-marker>
  <a-entity camera></a-entity>
 </a-scene>
 </body>
