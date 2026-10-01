@@ -1,272 +1,44 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,user-scalable=no,minimum-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
-<title>Clamp AR Prototype 6.4 - Native AR.js Multi-Marker</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<!-- Deliberately uses the official AR.js Three.js multi-marker stack, not our hand-built fusion. -->
-<script src="https://raw.githack.com/AR-js-org/AR.js/3.4.8/three.js/examples/vendor/three.js/build/three.js"></script>
-<script src="https://raw.githack.com/AR-js-org/AR.js/3.4.8/three.js/build/ar-threex.js"></script>
-<script src="https://raw.githack.com/AR-js-org/AR.js/3.4.8/three.js/build/ar.js"></script>
+  <title>Clamp AR Test</title>
 
-<style>
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:system-ui,Arial,sans-serif}
-canvas{position:fixed!important;inset:0;z-index:2}
-#hud{
- position:fixed;z-index:10000;left:10px;right:10px;top:10px;
- padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.72);
- color:#fff;font-size:14px;pointer-events:none
-}
-#status{font-weight:800}
-#diag{margin-top:5px;font:11px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
-#reset{
- position:fixed;z-index:10001;right:12px;bottom:12px;padding:9px 12px;
- border:0;border-radius:8px;background:rgba(0,0,0,.7);color:#fff;font-weight:700
-}
-</style>
+  <script type="module"
+    src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js">
+  </script>
+
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #eeeeee;
+      font-family: Arial, sans-serif;
+    }
+
+    model-viewer {
+      width: 100%;
+      height: 100%;
+      background-color: #eeeeee;
+    }
+  </style>
 </head>
+
 <body>
-<div id="hud">
- <div id="status">Starting native AR.js multi-marker…</div>
- <div>Prototype 6.4 · OFFICIAL MULTI-MARKER LEARNER / PLAYER</div>
- <div id="diag">This build does not fuse marker poses itself.</div>
-</div>
-<button id="reset">RESET BOARD</button>
 
-<script>
-(function(){
-'use strict';
+  <model-viewer
+    src="clamp.glb"
+    alt="Bench clamp"
+    ar
+    ar-modes="webxr scene-viewer quick-look"
+    ar-placement="floor"
+    camera-controls
+    auto-rotate
+    shadow-intensity="1">
+  </model-viewer>
 
-const statusEl=document.getElementById('status');
-const diagEl=document.getElementById('diag');
-const BOARD_KEY='ClampAR_6_4_MultiMarkerFile_v1';
-
-document.getElementById('reset').onclick=function(){
-  localStorage.removeItem(BOARD_KEY);
-  location.reload();
-};
-
-if(typeof THREE==='undefined' || typeof THREEx==='undefined' || typeof ARjs==='undefined'){
-  statusEl.textContent='LIBRARY LOAD FAILED';
-  diagEl.textContent='One of the official AR.js / Three.js scripts did not load.';
-  return;
-}
-
-// ---- Exact four patterns already used by the working A-Frame builds ----
-const markerParameters=[
- {type:'pattern', patternUrl:new URL('fid01.patt',location.href).href, size:0.05824},
- {type:'pattern', patternUrl:new URL('fid02.patt',location.href).href, size:0.05830},
- {type:'pattern', patternUrl:new URL('fid03.patt',location.href).href, size:0.05484},
- {type:'pattern', patternUrl:new URL('fid04.patt',location.href).href, size:0.05577}
-];
-
-const renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});
-renderer.setClearColor(new THREE.Color(0x000000),0);
-renderer.setSize(window.innerWidth,window.innerHeight);
-renderer.domElement.style.position='fixed';
-renderer.domElement.style.top='0';
-renderer.domElement.style.left='0';
-document.body.appendChild(renderer.domElement);
-
-const scene=new THREE.Scene();
-const camera=new THREE.Camera();
-scene.add(camera);
-const onRender=[];
-
-const profile=new ARjs.Profile();
-profile.sourceWebcam().trackingBackend('artoolkit');
-
-const source=new ARjs.Source(profile.sourceParameters);
-const context=new ARjs.Context(profile.contextParameters);
-
-function resize(){
-  source.onResizeElement();
-  source.copyElementSizeTo(renderer.domElement);
-  if(context.arController!==null){
-    source.copyElementSizeTo(context.arController.canvas);
-  }
-}
-window.addEventListener('resize',resize);
-window.addEventListener('orientationchange',()=>setTimeout(resize,250));
-
-source.init(function(){
-  resize();
-  statusEl.textContent='Camera ready · initialising ARToolKit…';
-});
-
-context.init(function(){
-  camera.projectionMatrix.copy(context.getProjectionMatrix());
-  startMode();
-});
-
-onRender.push(function(){
-  if(source.ready===false) return;
-  context.update(source.domElement);
-});
-
-// Keep the source video behind the transparent renderer.
-const videoStyleTimer=setInterval(function(){
-  const v=source.domElement;
-  if(!v) return;
-  v.style.zIndex='0';
-  v.style.position='fixed';
-  clearInterval(videoStyleTimer);
-},100);
-
-// ---------- Mode A: official learner ----------
-function startLearner(){
-  statusEl.textContent='LEARNING BOARD · keep all 4 markers visible';
-  diagEl.textContent='Using THREEx.ArMultiMakersLearning from AR.js.\nNo surveyed transforms, no pose averaging, no hand-written board solver.';
-
-  const roots=[];
-  const controls=[];
-
-  markerParameters.forEach(function(p){
-    const root=new THREE.Group();
-    scene.add(root);
-    roots.push(root);
-    controls.push(new THREEx.ArMarkerControls(context,root,p));
-  });
-
-  const learner=new THREEx.ArMultiMakersLearning(context,controls);
-  learner.resetStats();
-  learner.enabled=true;
-
-  let stableTicks=0;
-  const timer=setInterval(function(){
-    learner.computeResult();
-
-    const progress=controls.map(function(c){
-      const r=c.object3d.userData.result;
-      return r ? Math.min(1,r.confidenceFactor||0) : 0;
-    });
-
-    const learned=progress.filter(v=>v>=1).length;
-    statusEl.textContent='LEARNING BOARD · '+learned+'/4 learned';
-    diagEl.textContent='FID01 '+Math.round(progress[0]*100)+'% · FID02 '+Math.round(progress[1]*100)+'% · FID03 '+Math.round(progress[2]*100)+'% · FID04 '+Math.round(progress[3]*100)+'%\nHold the whole A3 mat steady in view. Calibration saves automatically.';
-
-    if(learned===4){
-      stableTicks++;
-    }else{
-      stableTicks=0;
-    }
-
-    if(stableTicks>=4){
-      clearInterval(timer);
-      learner.enabled=false;
-      learner.computeResult();
-      const json=learner.toJSON();
-      localStorage.setItem(BOARD_KEY,json);
-      statusEl.textContent='BOARD LEARNED · switching to native player…';
-      diagEl.textContent='AR.js generated the four-marker board relationship. Reloading once.';
-      setTimeout(()=>location.reload(),700);
-    }
-  },100);
-}
-
-// ---------- Mode B: official player ----------
-function startPlayer(boardFile){
-  statusEl.textContent='NATIVE MULTI-MARKER PLAYER · loading board';
-  diagEl.textContent='THREEx.ArMultiMarkerControls owns the board pose.';
-
-  const markerRoot=new THREE.Group();
-  scene.add(markerRoot);
-
-  let multi;
-  try{
-    multi=THREEx.ArMultiMarkerControls.fromJSON(context,scene,markerRoot,boardFile);
-  }catch(e){
-    localStorage.removeItem(BOARD_KEY);
-    statusEl.textContent='BOARD FILE ERROR · recalibrating';
-    diagEl.textContent=String(e);
-    setTimeout(()=>location.reload(),1000);
-    return;
-  }
-
-  const smoothedRoot=new THREE.Group();
-  scene.add(smoothedRoot);
-  const smoothed=new THREEx.ArSmoothedControls(smoothedRoot);
-
-  onRender.push(function(){
-    multi.updateSmoothedControls(smoothed);
-    smoothed.update(markerRoot);
-  });
-
-  // AR.js itself computes the board centre from its learned marker transforms.
-  const worldRoot=new THREE.Group();
-  const centreMatrix=THREEx.ArMultiMarkerControls.computeCenter(boardFile);
-  centreMatrix.decompose(worldRoot.position,worldRoot.quaternion,worldRoot.scale);
-  smoothedRoot.add(worldRoot);
-
-  // A loud, simple registration target.  Dimensions are in metres because
-  // each learner marker was given its measured physical size in metres.
-  const mat=new THREE.MeshBasicMaterial({
-    color:0x00ff88,transparent:true,opacity:0.75,side:THREE.DoubleSide
-  });
-  const white=new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide});
-  const magenta=new THREE.MeshBasicMaterial({color:0xff00ff});
-
-  function bar(w,d,x,z,material){
-    const g=new THREE.BoxGeometry(w,0.0025,d);
-    const m=new THREE.Mesh(g,material);
-    m.position.set(x,0.004,z);
-    worldRoot.add(m);
-  }
-
-  // 177 x 76 mm footprint
-  bar(0.177,0.003,0,-0.038,mat);
-  bar(0.177,0.003,0, 0.038,mat);
-  bar(0.003,0.076,-0.0885,0,mat);
-  bar(0.003,0.076, 0.0885,0,mat);
-
-  // centre cross
-  bar(0.050,0.003,0,0,white);
-  bar(0.003,0.050,0,0,white);
-  const dot=new THREE.Mesh(new THREE.SphereGeometry(0.005,16,8),magenta);
-  dot.position.y=0.008;
-  worldRoot.add(dot);
-
-  // 177 x 76 x 20 mm translucent "virtual clamp footprint block"
-  const block=new THREE.Mesh(
-    new THREE.BoxGeometry(0.177,0.020,0.076),
-    new THREE.MeshNormalMaterial({transparent:true,opacity:0.32})
-  );
-  block.position.y=0.011;
-  worldRoot.add(block);
-
-  let lastText=0;
-  onRender.push(function(){
-    const now=performance.now();
-    if(now-lastText<150) return;
-    lastText=now;
-    const visible=multi.subMarkersControls.filter(c=>c.object3d.visible).length;
-    statusEl.textContent='BOARD LOCK · '+visible+' marker'+(visible===1?'':'s')+' visible';
-    diagEl.textContent='OFFICIAL AR.js multi-marker player\nGREEN = 177×76 mm footprint · WHITE/MAGENTA = learned board centre\nNo custom fusion · no 19.437 correction · no marker handover code';
-  });
-}
-
-function startMode(){
-  const board=localStorage.getItem(BOARD_KEY);
-  if(board){
-    startPlayer(board);
-  }else{
-    startLearner();
-  }
-}
-
-// render loop
-let last=performance.now();
-function animate(now){
-  requestAnimationFrame(animate);
-  const dt=Math.min(0.2,(now-last)/1000);
-  last=now;
-  onRender.forEach(fn=>fn(dt,now/1000));
-  renderer.render(scene,camera);
-}
-requestAnimationFrame(animate);
-
-})();
-</script>
 </body>
 </html>
