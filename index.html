@@ -2,407 +2,271 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Bench Clamp AR Prototype 6.3</title>
-<script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
+<meta name="viewport" content="width=device-width,user-scalable=no,minimum-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
+<title>Clamp AR Prototype 6.4 - Native AR.js Multi-Marker</title>
+
+<!-- Deliberately uses the official AR.js Three.js multi-marker stack, not our hand-built fusion. -->
+<script src="https://raw.githack.com/AR-js-org/AR.js/3.4.8/three.js/examples/vendor/three.js/build/three.js"></script>
+<script src="https://raw.githack.com/AR-js-org/AR.js/3.4.8/three.js/build/ar-threex.js"></script>
+<script src="https://raw.githack.com/AR-js-org/AR.js/3.4.8/three.js/build/ar.js"></script>
+
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:system-ui,Arial,sans-serif}
-#hud{position:fixed;z-index:10000;left:10px;right:10px;top:10px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.68);color:#fff;font-size:14px;pointer-events:none}
-#status{font-weight:700}.small{font-size:12px;opacity:.82;margin-top:4px}#diag{font:11px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;opacity:.95;margin-top:6px;white-space:pre-wrap}
-#display-video{
- position:fixed!important;inset:0!important;
- width:100vw!important;height:100vh!important;
- object-fit:cover!important;
- z-index:0!important;background:#000;
+canvas{position:fixed!important;inset:0;z-index:2}
+#hud{
+ position:fixed;z-index:10000;left:10px;right:10px;top:10px;
+ padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.72);
+ color:#fff;font-size:14px;pointer-events:none
 }
-#arjs-video{
- position:fixed!important;width:1px!important;height:1px!important;
- left:-10px!important;top:-10px!important;opacity:0!important;pointer-events:none!important;
+#status{font-weight:800}
+#diag{margin-top:5px;font:11px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
+#reset{
+ position:fixed;z-index:10001;right:12px;bottom:12px;padding:9px 12px;
+ border:0;border-radius:8px;background:rgba(0,0,0,.7);color:#fff;font-weight:700
 }
-a-scene,.a-canvas{
- position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;
- max-width:none!important;max-height:none!important;
-}
-a-scene{z-index:1!important;background:transparent!important}
-.a-canvas{z-index:1!important;background:transparent!important}
-.a-enter-vr,.a-enter-ar{display:none!important}
 </style>
-<script>
-AFRAME.registerComponent('single-anchor-controller',{init:function(){
- const scene=this.el;
- const status=document.getElementById('status');
- const diag=document.getElementById('diag');
- const display=document.getElementById('display-video');
-
- const markers=['m1','m2','m3','m4'].map(id=>document.getElementById(id));
- const datums=['d1','d2','d3','d4'].map(id=>document.getElementById(id));
- const names=['FID01 TOP','FID02 RIGHT','FID03 BOTTOM','FID04 LEFT'];
-
- let active=-1;
- let lastActive=-1;
- let streak=[0,0,0,0];
- let handovers=0;
-
- datums.forEach(d=>{d.setAttribute('visible',false); d.object3D.visible=false;});
-
- // -------- Camera/display plumbing: preserved from known-good 2.1 branch --------
- const attachDisplay=()=>{
-   const source=document.getElementById('arjs-video');
-   if(source && source.srcObject && display.srcObject!==source.srcObject){
-     display.srcObject=source.srcObject;
-     display.play().catch(()=>{});
-   }
- };
- window.addEventListener('camera-init',()=>setTimeout(attachDisplay,50));
- window.addEventListener('arjs-video-loaded',attachDisplay);
- const streamTimer=setInterval(()=>{
-   attachDisplay();
-   if(display.srcObject) clearInterval(streamTimer);
- },100);
-
- function syncViewport(){
-   const source=document.getElementById('arjs-video');
-   const canvas=scene.canvas || document.querySelector('.a-canvas');
-   if(!source || !canvas) return;
-
-   const vw=source.videoWidth||640, vh=source.videoHeight||480;
-   const sw=window.innerWidth, sh=window.innerHeight;
-   const va=vw/vh, sa=sw/sh;
-   let w,h,left,top;
-
-   if(va>sa){
-     h=sh; w=h*va; left=(sw-w)/2; top=0;
-   }else{
-     w=sw; h=w/va; left=0; top=(sh-h)/2;
-   }
-
-   Object.assign(display.style,{
-     width:w+'px',height:h+'px',left:left+'px',top:top+'px',
-     right:'auto',bottom:'auto',objectFit:'fill'
-   });
-   Object.assign(canvas.style,{
-     position:'fixed',width:w+'px',height:h+'px',left:left+'px',top:top+'px',
-     maxWidth:'none',maxHeight:'none',background:'transparent'
-   });
-
-   if(scene.renderer){
-     const cur=scene.renderer.getSize(new THREE.Vector2());
-     if(Math.abs(cur.x-w)>1 || Math.abs(cur.y-h)>1){
-       scene.renderer.setSize(Math.round(w),Math.round(h),false);
-     }
-   }
- }
- window.addEventListener('camera-init',()=>{setTimeout(syncViewport,100);setTimeout(syncViewport,700)});
- window.addEventListener('arjs-video-loaded',()=>setTimeout(syncViewport,50));
- window.addEventListener('resize',syncViewport);
- window.addEventListener('orientationchange',()=>setTimeout(syncViewport,250));
- setInterval(syncViewport,500);
-
- const transparent=()=>{
-   if(scene.renderer){
-     scene.renderer.setClearColor(0x000000,0);
-     scene.renderer.setClearAlpha(0);
-     scene.renderer.domElement.style.background='transparent';
-   }
- };
- scene.addEventListener('render-target-loaded',transparent);
- setTimeout(transparent,500);
-
- function setActive(next){
-   if(next===active) return;
-   lastActive=active;
-   active=next;
-   datums.forEach((d,i)=>{
-     const on=(i===active);
-     d.setAttribute('visible',on);
-     d.object3D.visible=on;
-   });
-   if(lastActive>=0 && active>=0 && lastActive!==active) handovers++;
- }
-
- scene.addEventListener('renderstart',()=>{
-   const loop=()=>{
-     const visible=[];
-     markers.forEach((m,i)=>{
-       const on=!!m.object3D.visible;
-       streak[i]=on ? Math.min(streak[i]+1,60) : 0;
-       if(on) visible.push(i);
-     });
-
-     // Keep the current marker for as long as it remains tracked. This prevents
-     // needless frame-to-frame swapping when several markers are simultaneously visible.
-     if(active<0 || !markers[active].object3D.visible){
-       let candidate=-1;
-       let best=-1;
-       visible.forEach(i=>{
-         if(streak[i]>best){ best=streak[i]; candidate=i; }
-       });
-       if(candidate>=0 && streak[candidate]>=2) setActive(candidate);
-       else if(visible.length===0) setActive(-1);
-     }
-
-     // If AR.js has hidden the active marker, its child is hidden automatically.
-     // Explicitly keep every non-active datum off so there can never be multiple copies.
-     datums.forEach((d,i)=>{
-       const on=(i===active);
-       if(d.object3D.visible!==on){
-         d.setAttribute('visible',on);
-         d.object3D.visible=on;
-       }
-     });
-
-     if(active>=0 && markers[active].object3D.visible){
-       const backups=visible.filter(i=>i!==active).length;
-       status.textContent='SINGLE-ANCHOR LOCK · '+names[active];
-       diag.textContent=
-         'driver: '+names[active]+' · backups visible: '+backups+' · handovers: '+handovers+
-         '\nNO pose fusion · calibrated scene scale 19.437×'+
-         '\nscene scale: 19.437 units/m · marker→datum signs corrected'+
-         '\nWHITE/MAGENTA = centre · GREEN = 177×76 mm footprint'+
-         '\nCYAN/YELLOW/ORANGE/PURPLE rings = FID01/02/03/04 centres';
-     }else if(visible.length){
-       status.textContent='Acquiring single anchor…';
-       diag.textContent='Visible markers: '+visible.map(i=>names[i]).join(', ')+
-         '\nWaiting for 2 consecutive tracked frames.';
-     }else{
-       status.textContent='Find any fiducial · 0 seen';
-       diag.textContent='Only ONE marker is required in Prototype 6.3.'+
-         '\nThe other three are redundancy for handover.';
-     }
-
-     requestAnimationFrame(loop);
-   };
-   requestAnimationFrame(loop);
- });
-}});
-</script>
 </head>
 <body>
-<video id="display-video" autoplay muted playsinline></video>
 <div id="hud">
- <div id="status">Starting camera…</div>
- <div class="small">Prototype 6.3 · SINGLE-MARKER DATUM · CORRECTED OFFSET SIGNS</div>
- <div id="diag"></div>
+ <div id="status">Starting native AR.js multi-marker…</div>
+ <div>Prototype 6.4 · OFFICIAL MULTI-MARKER LEARNER / PLAYER</div>
+ <div id="diag">This build does not fuse marker poses itself.</div>
 </div>
+<button id="reset">RESET BOARD</button>
 
-<a-scene single-anchor-controller embedded vr-mode-ui="enabled:false"
- renderer="antialias:true; alpha:true; precision:mediump"
- arjs="sourceType:webcam; debugUIEnabled:false; detectionMode:mono;">
+<script>
+(function(){
+'use strict';
 
- <a-marker id="m1" type="pattern" url="fid01.patt" size="0.05824" smooth="false">
-   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
-   <a-entity id="d1" class="datum-anchor" visible="false"
-             position="0.000000000 0 -1.817359500">
-    <a-entity scale="19.437 19.437 19.437">
+const statusEl=document.getElementById('status');
+const diagEl=document.getElementById('diag');
+const BOARD_KEY='ClampAR_6_4_MultiMarkerFile_v1';
 
-      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
-      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-sphere position="0 0.005 0" radius="0.004"
-                material="color:#ff00ff; shader:flat"></a-sphere>
+document.getElementById('reset').onclick=function(){
+  localStorage.removeItem(BOARD_KEY);
+  location.reload();
+};
 
-      <!-- GREEN = exact 177 x 76 mm target footprint -->
-      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
+if(typeof THREE==='undefined' || typeof THREEx==='undefined' || typeof ARjs==='undefined'){
+  statusEl.textContent='LIBRARY LOAD FAILED';
+  diagEl.textContent='One of the official AR.js / Three.js scripts did not load.';
+  return;
+}
 
-      <!-- Rays from target datum to all four surveyed fiducial centres -->
-      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
-      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
+// ---- Exact four patterns already used by the working A-Frame builds ----
+const markerParameters=[
+ {type:'pattern', patternUrl:new URL('fid01.patt',location.href).href, size:0.05824},
+ {type:'pattern', patternUrl:new URL('fid02.patt',location.href).href, size:0.05830},
+ {type:'pattern', patternUrl:new URL('fid03.patt',location.href).href, size:0.05484},
+ {type:'pattern', patternUrl:new URL('fid04.patt',location.href).href, size:0.05577}
+];
 
-      <!-- Rings should overlay the physical centres of FID01..04 -->
-      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#00ffff; shader:flat; side:double"></a-ring>
-      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ffff00; shader:flat; side:double"></a-ring>
-      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ff8800; shader:flat; side:double"></a-ring>
-      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#aa66ff; shader:flat; side:double"></a-ring>
+const renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});
+renderer.setClearColor(new THREE.Color(0x000000),0);
+renderer.setSize(window.innerWidth,window.innerHeight);
+renderer.domElement.style.position='fixed';
+renderer.domElement.style.top='0';
+renderer.domElement.style.left='0';
+document.body.appendChild(renderer.domElement);
 
-      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
-      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
-             material="color:#ff3333; shader:flat"></a-box>
-      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
-             material="color:#3388ff; shader:flat"></a-box>
+const scene=new THREE.Scene();
+const camera=new THREE.Camera();
+scene.add(camera);
+const onRender=[];
 
-   
-    </a-entity></a-entity>
- </a-marker>
- <a-marker id="m2" type="pattern" url="fid02.patt" size="0.05830" smooth="false">
-   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
-   <a-entity id="d2" class="datum-anchor" visible="false"
-             position="2.829832830 0 0.000000000">
-    <a-entity scale="19.437 19.437 19.437">
+const profile=new ARjs.Profile();
+profile.sourceWebcam().trackingBackend('artoolkit');
 
-      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
-      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-sphere position="0 0.005 0" radius="0.004"
-                material="color:#ff00ff; shader:flat"></a-sphere>
+const source=new ARjs.Source(profile.sourceParameters);
+const context=new ARjs.Context(profile.contextParameters);
 
-      <!-- GREEN = exact 177 x 76 mm target footprint -->
-      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
+function resize(){
+  source.onResizeElement();
+  source.copyElementSizeTo(renderer.domElement);
+  if(context.arController!==null){
+    source.copyElementSizeTo(context.arController.canvas);
+  }
+}
+window.addEventListener('resize',resize);
+window.addEventListener('orientationchange',()=>setTimeout(resize,250));
 
-      <!-- Rays from target datum to all four surveyed fiducial centres -->
-      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
-      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
+source.init(function(){
+  resize();
+  statusEl.textContent='Camera ready · initialising ARToolKit…';
+});
 
-      <!-- Rings should overlay the physical centres of FID01..04 -->
-      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#00ffff; shader:flat; side:double"></a-ring>
-      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ffff00; shader:flat; side:double"></a-ring>
-      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ff8800; shader:flat; side:double"></a-ring>
-      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#aa66ff; shader:flat; side:double"></a-ring>
+context.init(function(){
+  camera.projectionMatrix.copy(context.getProjectionMatrix());
+  startMode();
+});
 
-      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
-      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
-             material="color:#ff3333; shader:flat"></a-box>
-      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
-             material="color:#3388ff; shader:flat"></a-box>
+onRender.push(function(){
+  if(source.ready===false) return;
+  context.update(source.domElement);
+});
 
-   
-    </a-entity></a-entity>
- </a-marker>
- <a-marker id="m3" type="pattern" url="fid03.patt" size="0.05484" smooth="false">
-   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
-   <a-entity id="d3" class="datum-anchor" visible="false"
-             position="0.000000000 0 1.820275050">
-    <a-entity scale="19.437 19.437 19.437">
+// Keep the source video behind the transparent renderer.
+const videoStyleTimer=setInterval(function(){
+  const v=source.domElement;
+  if(!v) return;
+  v.style.zIndex='0';
+  v.style.position='fixed';
+  clearInterval(videoStyleTimer);
+},100);
 
-      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
-      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-sphere position="0 0.005 0" radius="0.004"
-                material="color:#ff00ff; shader:flat"></a-sphere>
+// ---------- Mode A: official learner ----------
+function startLearner(){
+  statusEl.textContent='LEARNING BOARD · keep all 4 markers visible';
+  diagEl.textContent='Using THREEx.ArMultiMakersLearning from AR.js.\nNo surveyed transforms, no pose averaging, no hand-written board solver.';
 
-      <!-- GREEN = exact 177 x 76 mm target footprint -->
-      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
+  const roots=[];
+  const controls=[];
 
-      <!-- Rays from target datum to all four surveyed fiducial centres -->
-      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
-      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
+  markerParameters.forEach(function(p){
+    const root=new THREE.Group();
+    scene.add(root);
+    roots.push(root);
+    controls.push(new THREEx.ArMarkerControls(context,root,p));
+  });
 
-      <!-- Rings should overlay the physical centres of FID01..04 -->
-      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#00ffff; shader:flat; side:double"></a-ring>
-      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ffff00; shader:flat; side:double"></a-ring>
-      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ff8800; shader:flat; side:double"></a-ring>
-      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#aa66ff; shader:flat; side:double"></a-ring>
+  const learner=new THREEx.ArMultiMakersLearning(context,controls);
+  learner.resetStats();
+  learner.enabled=true;
 
-      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
-      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
-             material="color:#ff3333; shader:flat"></a-box>
-      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
-             material="color:#3388ff; shader:flat"></a-box>
+  let stableTicks=0;
+  const timer=setInterval(function(){
+    learner.computeResult();
 
-   
-    </a-entity></a-entity>
- </a-marker>
- <a-marker id="m4" type="pattern" url="fid04.patt" size="0.05577" smooth="false">
-   <!-- Marker-local translation from this fiducial centre to the common mat datum -->
-   <a-entity id="d4" class="datum-anchor" visible="false"
-             position="-2.852671305 0 0.000000000">
-    <a-entity scale="19.437 19.437 19.437">
+    const progress=controls.map(function(c){
+      const r=c.object3d.userData.result;
+      return r ? Math.min(1,r.confidenceFactor||0) : 0;
+    });
 
-      <!-- WHITE cross + MAGENTA dot = calculated centre of printed rectangle -->
-      <a-box position="0 0.003 0" width="0.040" height="0.0025" depth="0.003"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-box position="0 0.003 0" width="0.003" height="0.0025" depth="0.040"
-             material="color:#ffffff; shader:flat"></a-box>
-      <a-sphere position="0 0.005 0" radius="0.004"
-                material="color:#ff00ff; shader:flat"></a-sphere>
+    const learned=progress.filter(v=>v>=1).length;
+    statusEl.textContent='LEARNING BOARD · '+learned+'/4 learned';
+    diagEl.textContent='FID01 '+Math.round(progress[0]*100)+'% · FID02 '+Math.round(progress[1]*100)+'% · FID03 '+Math.round(progress[2]*100)+'% · FID04 '+Math.round(progress[3]*100)+'%\nHold the whole A3 mat steady in view. Calibration saves automatically.';
 
-      <!-- GREEN = exact 177 x 76 mm target footprint -->
-      <a-box position="0 0.002 -0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0 0.002 0.038" width="0.177" height="0.002" depth="0.0025"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="-0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
-      <a-box position="0.0885 0.002 0" width="0.0025" height="0.002" depth="0.076"
-             material="color:#00ff88; shader:flat"></a-box>
+    if(learned===4){
+      stableTicks++;
+    }else{
+      stableTicks=0;
+    }
 
-      <!-- Rays from target datum to all four surveyed fiducial centres -->
-      <a-entity line="start:0 0.003 0; end:0 0.003 -0.093500; color:#00ffff"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0.145590 0.003 0; color:#ffff00"></a-entity>
-      <a-entity line="start:0 0.003 0; end:0 0.003 0.093650; color:#ff8800"></a-entity>
-      <a-entity line="start:0 0.003 0; end:-0.146765 0.003 0; color:#aa66ff"></a-entity>
+    if(stableTicks>=4){
+      clearInterval(timer);
+      learner.enabled=false;
+      learner.computeResult();
+      const json=learner.toJSON();
+      localStorage.setItem(BOARD_KEY,json);
+      statusEl.textContent='BOARD LEARNED · switching to native player…';
+      diagEl.textContent='AR.js generated the four-marker board relationship. Reloading once.';
+      setTimeout(()=>location.reload(),700);
+    }
+  },100);
+}
 
-      <!-- Rings should overlay the physical centres of FID01..04 -->
-      <a-ring position="0 0.004 -0.093500" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#00ffff; shader:flat; side:double"></a-ring>
-      <a-ring position="0.145590 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ffff00; shader:flat; side:double"></a-ring>
-      <a-ring position="0 0.004 0.093650" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#ff8800; shader:flat; side:double"></a-ring>
-      <a-ring position="-0.146765 0.004 0" rotation="-90 0 0"
-              radius-inner="0.0045" radius-outer="0.0075"
-              material="color:#aa66ff; shader:flat; side:double"></a-ring>
+// ---------- Mode B: official player ----------
+function startPlayer(boardFile){
+  statusEl.textContent='NATIVE MULTI-MARKER PLAYER · loading board';
+  diagEl.textContent='THREEx.ArMultiMarkerControls owns the board pose.';
 
-      <!-- Local page axes: RED +X = right, BLUE +Z = down the sheet -->
-      <a-box position="0.025 0.005 0" width="0.045" height="0.0025" depth="0.0025"
-             material="color:#ff3333; shader:flat"></a-box>
-      <a-box position="0 0.005 0.025" width="0.0025" height="0.0025" depth="0.045"
-             material="color:#3388ff; shader:flat"></a-box>
+  const markerRoot=new THREE.Group();
+  scene.add(markerRoot);
 
-   
-    </a-entity></a-entity>
- </a-marker>
- <a-entity camera></a-entity>
-</a-scene>
+  let multi;
+  try{
+    multi=THREEx.ArMultiMarkerControls.fromJSON(context,scene,markerRoot,boardFile);
+  }catch(e){
+    localStorage.removeItem(BOARD_KEY);
+    statusEl.textContent='BOARD FILE ERROR · recalibrating';
+    diagEl.textContent=String(e);
+    setTimeout(()=>location.reload(),1000);
+    return;
+  }
+
+  const smoothedRoot=new THREE.Group();
+  scene.add(smoothedRoot);
+  const smoothed=new THREEx.ArSmoothedControls(smoothedRoot);
+
+  onRender.push(function(){
+    multi.updateSmoothedControls(smoothed);
+    smoothed.update(markerRoot);
+  });
+
+  // AR.js itself computes the board centre from its learned marker transforms.
+  const worldRoot=new THREE.Group();
+  const centreMatrix=THREEx.ArMultiMarkerControls.computeCenter(boardFile);
+  centreMatrix.decompose(worldRoot.position,worldRoot.quaternion,worldRoot.scale);
+  smoothedRoot.add(worldRoot);
+
+  // A loud, simple registration target.  Dimensions are in metres because
+  // each learner marker was given its measured physical size in metres.
+  const mat=new THREE.MeshBasicMaterial({
+    color:0x00ff88,transparent:true,opacity:0.75,side:THREE.DoubleSide
+  });
+  const white=new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide});
+  const magenta=new THREE.MeshBasicMaterial({color:0xff00ff});
+
+  function bar(w,d,x,z,material){
+    const g=new THREE.BoxGeometry(w,0.0025,d);
+    const m=new THREE.Mesh(g,material);
+    m.position.set(x,0.004,z);
+    worldRoot.add(m);
+  }
+
+  // 177 x 76 mm footprint
+  bar(0.177,0.003,0,-0.038,mat);
+  bar(0.177,0.003,0, 0.038,mat);
+  bar(0.003,0.076,-0.0885,0,mat);
+  bar(0.003,0.076, 0.0885,0,mat);
+
+  // centre cross
+  bar(0.050,0.003,0,0,white);
+  bar(0.003,0.050,0,0,white);
+  const dot=new THREE.Mesh(new THREE.SphereGeometry(0.005,16,8),magenta);
+  dot.position.y=0.008;
+  worldRoot.add(dot);
+
+  // 177 x 76 x 20 mm translucent "virtual clamp footprint block"
+  const block=new THREE.Mesh(
+    new THREE.BoxGeometry(0.177,0.020,0.076),
+    new THREE.MeshNormalMaterial({transparent:true,opacity:0.32})
+  );
+  block.position.y=0.011;
+  worldRoot.add(block);
+
+  let lastText=0;
+  onRender.push(function(){
+    const now=performance.now();
+    if(now-lastText<150) return;
+    lastText=now;
+    const visible=multi.subMarkersControls.filter(c=>c.object3d.visible).length;
+    statusEl.textContent='BOARD LOCK · '+visible+' marker'+(visible===1?'':'s')+' visible';
+    diagEl.textContent='OFFICIAL AR.js multi-marker player\nGREEN = 177×76 mm footprint · WHITE/MAGENTA = learned board centre\nNo custom fusion · no 19.437 correction · no marker handover code';
+  });
+}
+
+function startMode(){
+  const board=localStorage.getItem(BOARD_KEY);
+  if(board){
+    startPlayer(board);
+  }else{
+    startLearner();
+  }
+}
+
+// render loop
+let last=performance.now();
+function animate(now){
+  requestAnimationFrame(animate);
+  const dt=Math.min(0.2,(now-last)/1000);
+  last=now;
+  onRender.forEach(fn=>fn(dt,now/1000));
+  renderer.render(scene,camera);
+}
+requestAnimationFrame(animate);
+
+})();
+</script>
 </body>
 </html>
